@@ -7,9 +7,13 @@ import { AudioLevelMeter } from './AudioLevelMeter.jsx';
  * - Start / Stop recording button
  * - Live permission status feedback
  * - Visual audio level meter
- * - Sentences cut counter and encoded PCM stats
+ * - Sentences cut counter, utterance sequence number, and encoded PCM stats
+ *
+ * @param {Object} props
+ * @param {Function} [props.onSentenceAudio] - Callback ({ audio, byteLength, durationSec }) invoked when audio is cut and encoded.
+ * @param {number} [props.seq] - Current sequence number sent or ready.
  */
-export function SpeakerMicControl() {
+export function SpeakerMicControl({ onSentenceAudio = null, seq = 0 }) {
   const {
     isRecording,
     micPermission,
@@ -18,7 +22,9 @@ export function SpeakerMicControl() {
     lastEncodedInfo,
     error,
     toggleRecording,
-  } = useAudioRecorder();
+  } = useAudioRecorder({
+    onSentenceCut: onSentenceAudio,
+  });
 
   return (
     <div style={panelStyle}>
@@ -63,6 +69,13 @@ export function SpeakerMicControl() {
           <span style={counterLabelStyle}>Sentences cut:</span>
           <span style={counterValueStyle}>{sentencesCutCount}</span>
         </div>
+
+        {seq > 0 && (
+          <div style={statRowStyle}>
+            <span style={counterLabelStyle}>Last sent seq:</span>
+            <span style={seqValueStyle}>#{seq}</span>
+          </div>
+        )}
 
         {lastEncodedInfo && (
           <div style={encodedStatsStyle}>
@@ -157,6 +170,17 @@ const counterValueStyle = {
   padding: '0.15rem 0.6rem',
   borderRadius: '4px',
   border: '1px solid #0284c744',
+};
+
+const seqValueStyle = {
+  fontFamily: 'monospace',
+  fontSize: '0.9rem',
+  fontWeight: 700,
+  color: '#a78bfa',
+  background: '#7c3aed22',
+  padding: '0.15rem 0.5rem',
+  borderRadius: '4px',
+  border: '1px solid #7c3aed44',
 };
 
 const encodedStatsStyle = {
