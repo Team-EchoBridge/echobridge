@@ -7,12 +7,15 @@ import { AudioLevelMeter } from './AudioLevelMeter.jsx';
  * - Start / Stop recording button
  * - Live permission status feedback
  * - Visual audio level meter
+ * - Sentences cut counter and encoded PCM stats
  */
 export function SpeakerMicControl() {
   const {
     isRecording,
     micPermission,
     audioLevel,
+    sentencesCutCount,
+    lastEncodedInfo,
     error,
     toggleRecording,
   } = useAudioRecorder();
@@ -52,6 +55,21 @@ export function SpeakerMicControl() {
 
       <div style={meterContainerStyle}>
         <AudioLevelMeter level={audioLevel} isActive={isRecording} />
+      </div>
+
+      {/* Sentences cut counter & encoded stats */}
+      <div style={counterBoxStyle}>
+        <div style={statRowStyle}>
+          <span style={counterLabelStyle}>Sentences cut:</span>
+          <span style={counterValueStyle}>{sentencesCutCount}</span>
+        </div>
+
+        {lastEncodedInfo && (
+          <div style={encodedStatsStyle}>
+            <span>Last PCM: {lastEncodedInfo.durationSec}s</span>
+            <span>{(lastEncodedInfo.byteLength / 1024).toFixed(1)} KB (16 kHz mono)</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -109,6 +127,46 @@ const meterContainerStyle = {
   marginTop: '0.5rem',
 };
 
+const counterBoxStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '6px',
+  marginTop: '1rem',
+  paddingTop: '0.75rem',
+  borderTop: '1px solid #1e293b',
+};
+
+const statRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  fontSize: '0.85rem',
+};
+
+const counterLabelStyle = {
+  color: '#94a3b8',
+  fontWeight: 500,
+};
+
+const counterValueStyle = {
+  fontFamily: 'monospace',
+  fontSize: '1rem',
+  fontWeight: 700,
+  color: '#38bdf8',
+  background: '#0369a122',
+  padding: '0.15rem 0.6rem',
+  borderRadius: '4px',
+  border: '1px solid #0284c744',
+};
+
+const encodedStatsStyle = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  fontSize: '0.75rem',
+  color: '#64748b',
+  fontFamily: 'monospace',
+};
+
 const errorBannerStyle = {
   backgroundColor: '#7f1d1d',
   color: '#fecaca',
@@ -124,4 +182,3 @@ const warningTextStyle = {
   fontSize: '0.85rem',
   margin: '0 0 0.75rem 0',
 };
-
