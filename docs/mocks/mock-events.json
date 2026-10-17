@@ -1,0 +1,168 @@
+{
+  "client_to_server": {
+    "room:create": {
+      "description": "Sent by speaker to create a new session",
+      "payload": {
+        "srcLang": "hi"
+      },
+      "ack": {
+        "roomId": "ROOM-7821"
+      }
+    },
+    "room:join": {
+      "speaker_join": {
+        "description": "Speaker also joins the room to receive transcripts and captions",
+        "payload": {
+          "roomId": "ROOM-7821",
+          "tgtLang": "hi"
+        },
+        "ack": {
+          "ok": true,
+          "srcLang": "hi"
+        }
+      },
+      "listener_join": {
+        "description": "Listener joins to receive translated captions in en",
+        "payload": {
+          "roomId": "ROOM-7821",
+          "tgtLang": "en"
+        },
+        "ack": {
+          "ok": true,
+          "srcLang": "hi"
+        }
+      },
+      "failed_join": {
+        "description": "Join failure if room doesn't exist",
+        "payload": {
+          "roomId": "INVALID-ROOM",
+          "tgtLang": "en"
+        },
+        "ack": {
+          "ok": false,
+          "error": "Room not found"
+        }
+      }
+    },
+    "utterance": {
+      "description": "Sent by speaker containing up to 6s 16kHz mono PCM audio",
+      "payload": {
+        "roomId": "ROOM-7821",
+        "srcLang": "hi",
+        "seq": 1,
+        "audio": "<ArrayBuffer of 16-bit signed LE PCM, 16000Hz mono>",
+        "tSent": 1766000000000
+      }
+    },
+    "utterance_replay": {
+      "description": "Sent in replay mode to bypass NLP and serve cached result",
+      "payload": {
+        "roomId": "ROOM-7821",
+        "srcLang": "hi",
+        "seq": 2,
+        "audio": null,
+        "tSent": 1766000001000,
+        "replayId": "phrase-01"
+      }
+    }
+  },
+  "server_to_clients": {
+    "transcript": {
+      "description": "Sent to everyone in the room as soon as STT finishes",
+      "payload": {
+        "seq": 1,
+        "srcText": "कमरा का किराया पाँच सौ रुपये है",
+        "unclear": false,
+        "timings": {
+          "tSent": 1766000000000,
+          "tServerIn": 1766000000120,
+          "tSttDone": 1766000001100,
+          "tTranslateDone": 0,
+          "tEmit": 1766000001110
+        }
+      }
+    },
+    "caption": {
+      "description": "Sent to listeners in that tgtLang once translation and guard are done",
+      "payload": {
+        "seq": 1,
+        "srcText": "कमरा का किराया पाँच सौ रुपये है",
+        "tgtText": "The room rent is five hundred rupees.",
+        "tgtLang": "en",
+        "numbers": [
+          {
+            "value": 500,
+            "kind": "price",
+            "spoken": "पाँच सौ",
+            "verified": true
+          }
+        ],
+        "unclear": false,
+        "timings": {
+          "tSent": 1766000000000,
+          "tServerIn": 1766000000120,
+          "tSttDone": 1766000001100,
+          "tTranslateDone": 1766000001500,
+          "tEmit": 1766000001510
+        }
+      }
+    },
+    "caption_unclear": {
+      "description": "Sent when confidence is low or provider failed; tgtText is empty, listeners speak nothing",
+      "payload": {
+        "seq": 2,
+        "srcText": "...",
+        "tgtText": "",
+        "tgtLang": "en",
+        "numbers": [],
+        "unclear": true,
+        "timings": {
+          "tSent": 1766000002000,
+          "tServerIn": 1766000002120,
+          "tSttDone": 1766000003100,
+          "tTranslateDone": 1766000003300,
+          "tEmit": 1766000003310
+        }
+      }
+    },
+    "caption_unverified_number": {
+      "description": "Sent when number guard flags mismatch between speech and translation",
+      "payload": {
+        "seq": 3,
+        "srcText": "कमरा का किराया पाँच सौ रुपये है",
+        "tgtText": "The room rent is fifty rupees.",
+        "tgtLang": "en",
+        "numbers": [
+          {
+            "value": 500,
+            "kind": "price",
+            "spoken": "पाँच सौ",
+            "verified": false
+          }
+        ],
+        "unclear": false,
+        "timings": {
+          "tSent": 1766000004000,
+          "tServerIn": 1766000004120,
+          "tSttDone": 1766000005100,
+          "tTranslateDone": 1766000005500,
+          "tEmit": 1766000005510
+        }
+      }
+    },
+    "room:count": {
+      "description": "Sent to speaker socket when listener count changes",
+      "payload": {
+        "count": 3
+      }
+    },
+    "utterance:error": {
+      "description": "Sent to speaker on bad payload or room errors",
+      "payload": {
+        "seq": 1,
+        "message": "Room not found or expired"
+      }
+    }
+  }
+}
+
