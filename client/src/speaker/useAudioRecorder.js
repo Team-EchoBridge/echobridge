@@ -1,16 +1,37 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
 /**
- * Hook to manage microphone access, recording state, and audio level metering.
+ * Hook to manage microphone access, recording state, audio level metering,
+ * and sentence slicing based on voice activity and silence detection.
+ *
+ * Slicing Rules:
+ * - Speech threshold: normalized RMS > silenceThreshold (default 0.05).
+ * - Silence cut: triggers after ~0.5s of continuous silence following valid speech.
+ * - Max speech duration: forced cut after 6.0s of continuous speech.
+ * - Noise burst filter: speech shorter than minSpeechDuration (0.25s) is discarded.
  *
  * @param {Object} options
  * @param {number} [options.fftSize=256] - FFT size for AnalyserNode.
  * @param {number} [options.smoothingTimeConstant=0.8] - Smoothing constant (0 to 1).
+ * @param {number} [options.silenceThreshold=0.05] - RMS threshold below which audio is considered silence.
+ * @param {number} [options.silenceDurationMs=500] - Duration of silence (ms) to trigger a sentence cut (~0.5s).
+ * @param {number} [options.maxDurationMs=6000] - Forced cut duration (ms) for continuous speech (6s).
+ * @param {number} [options.minSpeechDurationMs=250] - Minimum speech duration (ms) to ignore short noise bursts.
+ * @param {Function} [options.onSentenceCut] - Callback invoked on cut: ({ startTime, durationMs, cutReason }).
  */
-export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } = {}) {
+export function useAudioRecorder({
+  fftSize = 256,
+  smoothingTimeConstant = 0.8,
+  silenceThreshold = 0.05,
+  silenceDurationMs = 500,
+  maxDurationMs = 6000,
+  minSpeechDurationMs = 250,
+  onSentenceCut = null,
+} = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [micPermission, setMicPermission] = useState('prompt'); // 'prompt' | 'granted' | 'denied'
   const [audioLevel, setAudioLevel] = useState(0); // 0.0 to 1.0 (normalized volume)
+  const [sentencesCutCount, setSentencesCutCount] = useState(0);
   const [error, setError] = useState(null);
 
   const audioContextRef = useRef(null);
@@ -18,6 +39,42 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
   const dataArrayRef = useRef(null);
+
+  // VAD / sentence slicing tracking refs
+  const speechStateRef = useRef({
+    isSpeaking: false,
+    speechStartTime: 0,
+    silenceStartTime: 0,
+  });
+
+  const onSentenceCutRef = useRef(onSentenceCut);
+  useEffect(() => {
+    onSentenceCutRef.current = onSentenceCut;
+  }, [onSentenceCut]);
+
+  const triggerCut = useCallback((reason) => {
+    const state = speechStateRef.current;
+    const now = Date.now();
+    const durationMs = state.speechStartTime ? now - state.speechStartTime : 0;
+
+    // Log each cut with start time and duration as requested
+    console.log(`[Sentence Cut] Reason: ${reason} | Start: ${new Date(state.speechStartTime).toISOString()} | Duration: ${durationMs}ms`);
+
+    setSentencesCutCount((prev) => prev + 1);
+
+    if (onSentenceCutRef.current) {
+      onSentenceCutRef.current({
+        startTime: state.speechStartTime,
+        durationMs,
+        cutReason: reason,
+      });
+    }
+
+    // Reset speech state for the next sentence
+    state.isSpeaking = false;
+    state.speechStartTime = 0;
+    state.silenceStartTime = 0;
+  }, []);
 
   const cleanupAudio = useCallback(() => {
     if (animFrameRef.current) {
@@ -37,36 +94,87 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
 
     analyserRef.current = null;
     dataArrayRef.current = null;
+
+    speechStateRef.current = {
+      isSpeaking: false,
+      speechStartTime: 0,
+      silenceStartTime: 0,
+    };
+
     setAudioLevel(0);
   }, []);
 
-  const startLevelMeter = useCallback(() => {
+  const processAudioLoop = useCallback(() => {
     const analyser = analyserRef.current;
     if (!analyser) return;
 
     const dataArray = dataArrayRef.current;
 
-    const updateMeter = () => {
+    const tick = () => {
       analyser.getByteTimeDomainData(dataArray);
 
       // Compute Root Mean Square (RMS) of audio samples normalized to 0.0 - 1.0
       let sumSquares = 0;
       for (let i = 0; i < dataArray.length; i++) {
-        // Sample value is 0-255, center is 128
+        // Sample byte is 0-255, midpoint is 128
         const normalized = (dataArray[i] - 128) / 128;
         sumSquares += normalized * normalized;
       }
       const rms = Math.sqrt(sumSquares / dataArray.length);
 
-      // Scale and clamp level between 0 and 1 with a slight boost for readability
+      // Boosted level for the visual UI level meter
       const boostedLevel = Math.min(1, rms * 3.5);
       setAudioLevel(boostedLevel);
 
-      animFrameRef.current = requestAnimationFrame(updateMeter);
+      // VAD & Slicing logic
+      const now = Date.now();
+      const state = speechStateRef.current;
+      const isAudible = rms >= silenceThreshold;
+
+      if (isAudible) {
+        // Sound is active
+        if (!state.isSpeaking) {
+          // Speech start
+          state.isSpeaking = true;
+          state.speechStartTime = now;
+          state.silenceStartTime = 0;
+        } else {
+          // Ongoing speech: reset any silence tracker
+          state.silenceStartTime = 0;
+
+          // Forced cut after maxDurationMs (6 seconds) of continuous speech
+          if (now - state.speechStartTime >= maxDurationMs) {
+            triggerCut('max-duration-6s');
+          }
+        }
+      } else {
+        // Sound is below silence threshold
+        if (state.isSpeaking) {
+          if (!state.silenceStartTime) {
+            // Silence just started
+            state.silenceStartTime = now;
+          } else if (now - state.silenceStartTime >= silenceDurationMs) {
+            // Silence has lasted for ~0.5s
+            const speechDuration = state.silenceStartTime - state.speechStartTime;
+            if (speechDuration >= minSpeechDurationMs) {
+              // Valid sentence completed
+              triggerCut('silence-0.5s');
+            } else {
+              // Ignore short noise burst (< 250ms)
+              console.log(`[Noise Burst Ignored] Duration: ${speechDuration}ms < ${minSpeechDurationMs}ms`);
+              state.isSpeaking = false;
+              state.speechStartTime = 0;
+              state.silenceStartTime = 0;
+            }
+          }
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
     };
 
-    animFrameRef.current = requestAnimationFrame(updateMeter);
-  }, []);
+    animFrameRef.current = requestAnimationFrame(tick);
+  }, [maxDurationMs, minSpeechDurationMs, silenceDurationMs, silenceThreshold, triggerCut]);
 
   const startRecording = useCallback(async () => {
     setError(null);
@@ -103,7 +211,13 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
       analyserRef.current = analyser;
       dataArrayRef.current = new Uint8Array(analyser.fftSize);
 
-      startLevelMeter();
+      speechStateRef.current = {
+        isSpeaking: false,
+        speechStartTime: 0,
+        silenceStartTime: 0,
+      };
+
+      processAudioLoop();
       setIsRecording(true);
     } catch (err) {
       console.error('Microphone access failed:', err);
@@ -116,12 +230,20 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
       setIsRecording(false);
       cleanupAudio();
     }
-  }, [cleanupAudio, fftSize, smoothingTimeConstant, startLevelMeter]);
+  }, [cleanupAudio, fftSize, processAudioLoop, smoothingTimeConstant]);
 
   const stopRecording = useCallback(() => {
+    // If speaking when stopped, finalize sentence cut if it exceeded minimum speech duration
+    const state = speechStateRef.current;
+    if (state.isSpeaking && state.speechStartTime) {
+      const speechDuration = Date.now() - state.speechStartTime;
+      if (speechDuration >= minSpeechDurationMs) {
+        triggerCut('manual-stop');
+      }
+    }
     cleanupAudio();
     setIsRecording(false);
-  }, [cleanupAudio]);
+  }, [cleanupAudio, minSpeechDurationMs, triggerCut]);
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {
@@ -141,6 +263,7 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
     isRecording,
     micPermission,
     audioLevel,
+    sentencesCutCount,
     error,
     startRecording,
     stopRecording,
@@ -150,4 +273,3 @@ export function useAudioRecorder({ fftSize = 256, smoothingTimeConstant = 0.8 } 
     analyserRef,
   };
 }
-

@@ -7,12 +7,14 @@ import { AudioLevelMeter } from './AudioLevelMeter.jsx';
  * - Start / Stop recording button
  * - Live permission status feedback
  * - Visual audio level meter
+ * - Sentences cut counter
  */
 export function SpeakerMicControl() {
   const {
     isRecording,
     micPermission,
     audioLevel,
+    sentencesCutCount,
     error,
     toggleRecording,
   } = useAudioRecorder();
@@ -52,6 +54,12 @@ export function SpeakerMicControl() {
 
       <div style={meterContainerStyle}>
         <AudioLevelMeter level={audioLevel} isActive={isRecording} />
+      </div>
+
+      {/* Sentences cut counter */}
+      <div style={counterBoxStyle}>
+        <span style={counterLabelStyle}>Sentences cut:</span>
+        <span style={counterValueStyle}>{sentencesCutCount}</span>
       </div>
     </div>
   );
@@ -109,6 +117,32 @@ const meterContainerStyle = {
   marginTop: '0.5rem',
 };
 
+const counterBoxStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginTop: '1rem',
+  paddingTop: '0.75rem',
+  borderTop: '1px solid #1e293b',
+  fontSize: '0.85rem',
+};
+
+const counterLabelStyle = {
+  color: '#94a3b8',
+  fontWeight: 500,
+};
+
+const counterValueStyle = {
+  fontFamily: 'monospace',
+  fontSize: '1rem',
+  fontWeight: 700,
+  color: '#38bdf8',
+  background: '#0369a122',
+  padding: '0.15rem 0.6rem',
+  borderRadius: '4px',
+  border: '1px solid #0284c744',
+};
+
 const errorBannerStyle = {
   backgroundColor: '#7f1d1d',
   color: '#fecaca',
@@ -124,4 +158,3 @@ const warningTextStyle = {
   fontSize: '0.85rem',
   margin: '0 0 0.75rem 0',
 };
-
