@@ -1,0 +1,92 @@
+{
+  "normal_result": {
+    "description": "Standard successful NLP processing with verified price",
+    "result": {
+      "srcText": "कमरा का किराया पाँच सौ रुपये है",
+      "translations": {
+        "en": "The room rent is five hundred rupees."
+      },
+      "numbers": [
+        {
+          "value": 500,
+          "kind": "price",
+          "spoken": "पाँच सौ",
+          "verified": true
+        }
+      ],
+      "confidence": 0.94,
+      "unclear": false,
+      "timings": {
+        "sttMs": 980,
+        "translateMs": 350,
+        "guardMs": 15
+      }
+    }
+  },
+  "unverified_number_result": {
+    "description": "Number guard caught discrepancy between source and translation",
+    "result": {
+      "srcText": "कमरा का किराया पाँच सौ रुपये है",
+      "translations": {
+        "en": "The room rent is fifty rupees."
+      },
+      "numbers": [
+        {
+          "value": 500,
+          "kind": "price",
+          "spoken": "पाँच सौ",
+          "verified": false
+        }
+      ],
+      "confidence": 0.91,
+      "unclear": false,
+      "timings": {
+        "sttMs": 950,
+        "translateMs": 340,
+        "guardMs": 18
+      }
+    }
+  },
+  "unclear_audio_result": {
+    "description": "Unclear / low confidence speech or provider timeout",
+    "result": {
+      "srcText": "",
+      "translations": {
+        "en": ""
+      },
+      "numbers": [],
+      "confidence": 0.28,
+      "unclear": true,
+      "timings": {
+        "sttMs": 620,
+        "translateMs": 0,
+        "guardMs": 0
+      }
+    }
+  },
+  "marathi_phrase_result": {
+    "description": "Marathi speech sample with checkout time",
+    "result": {
+      "srcText": "चेक आउट ची वेळ सकाळी अकरा वाजता आहे",
+      "translations": {
+        "en": "The check-out time is eleven in the morning."
+      },
+      "numbers": [
+        {
+          "value": 11,
+          "kind": "time",
+          "spoken": "अकरा",
+          "verified": true
+        }
+      ],
+      "confidence": 0.96,
+      "unclear": false,
+      "timings": {
+        "sttMs": 1020,
+        "translateMs": 380,
+        "guardMs": 20
+      }
+    }
+  }
+}
+
