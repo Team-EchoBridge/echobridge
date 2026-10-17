@@ -1,0 +1,16 @@
+{
+  "name": "echobridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live speech translation from Hindi/Marathi to English captions and audio",
+  "scripts": {
+    "server": "npm --prefix server start",
+    "client": "npm --prefix client dev",
+    "dev": "npm run server",
+    "test": "node server/src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
