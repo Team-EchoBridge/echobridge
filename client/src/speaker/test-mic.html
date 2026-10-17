@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EchoBridge - Speaker Step 2 Standalone Test</title>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 380px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    h3 { margin: 0; font-size: 1.15rem; }
+    .badge {
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      border: 1px solid #475569;
+      color: #94a3b8;
+    }
+    .badge.live {
+      border-color: #ef4444;
+      color: #ef4444;
+      background: #dc262622;
+    }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: #2563eb;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 1.25rem;
+    }
+    button.recording {
+      background: #dc2626;
+    }
+    .meter-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .meter-box {
+      display: flex;
+      gap: 4px;
+      height: 14px;
+      background: #1e293b;
+      padding: 4px;
+      border-radius: 6px;
+    }
+    .segment {
+      flex: 1;
+      height: 100%;
+      border-radius: 2px;
+      background: #334155;
+      opacity: 0.35;
+      transition: opacity 0.08s ease, background-color 0.08s ease;
+    }
+    .error {
+      background: #7f1d1d;
+      color: #fecaca;
+      padding: 0.6rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h3>Speaker Microphone</h3>
+      <span id="status-badge" class="badge">IDLE</span>
+    </div>
+
+    <div id="error-banner" class="error"></div>
+
+    <button id="record-btn">🎤 Start Speaking</button>
+
+    <div>
+      <div class="meter-label">
+        <span>Mic Level</span>
+        <span id="level-text" style="font-family: monospace;">Idle</span>
+      </div>
+      <div class="meter-box" id="meter-segments"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Direct vanilla test runner simulating the hook logic in useAudioRecorder.js
+    const totalSegments = 12;
+    const meterSegmentsEl = document.getElementById('meter-segments');
+    for (let i = 0; i < totalSegments; i++) {
+      const seg = document.createElement('div');
+      seg.className = 'segment';
+      meterSegmentsEl.appendChild(seg);
+    }
+    const segments = meterSegmentsEl.querySelectorAll('.segment');
+
+    const btn = document.getElementById('record-btn');
+    const badge = document.getElementById('status-badge');
+    const levelText = document.getElementById('level-text');
+    const errorEl = document.getElementById('error-banner');
+
+    let isRecording = false;
+    let audioCtx = null;
+    let stream = null;
+    let analyser = null;
+    let animId = null;
+
+    function cleanup() {
+      if (animId) cancelAnimationFrame(animId);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
+      audioCtx = null;
+      stream = null;
+      analyser = null;
+      updateMeter(0);
+      badge.textContent = 'IDLE';
+      badge.className = 'badge';
+      btn.textContent = '🎤 Start Speaking';
+      btn.className = '';
+      levelText.textContent = 'Idle';
+    }
+
+    function updateMeter(level) {
+      const activeCount = isRecording ? Math.round(level * totalSegments) : 0;
+      segments.forEach((seg, i) => {
+        const isActive = i < activeCount;
+        let color = '#22c55e';
+        if (i >= 9) color = '#ef4444';
+        else if (i >= 6) color = '#eab308';
+
+        seg.style.backgroundColor = isActive ? color : '#334155';
+        seg.style.opacity = isActive ? '1' : '0.35';
+        seg.style.boxShadow = isActive ? `0 0 6px ${color}aa` : 'none';
+      });
+      if (isRecording) {
+        levelText.textContent = `${Math.round(level * 100)}%`;
+      }
+    }
+
+    btn.addEventListener('click', async () => {
+      errorEl.style.display = 'none';
+      if (isRecording) {
+        isRecording = false;
+        cleanup();
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.fftSize);
+        isRecording = true;
+        badge.textContent = 'LIVE';
+        badge.className = 'badge live';
+        btn.textContent = '■ Stop Speaking';
+        btn.className = 'recording';
+
+        const tick = () => {
+          if (!isRecording) return;
+          analyser.getByteTimeDomainData(dataArray);
+          let sumSquares = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            const norm = (dataArray[i] - 128) / 128;
+            sumSquares += norm * norm;
+          }
+          const rms = Math.sqrt(sumSquares / dataArray.length);
+          const level = Math.min(1, rms * 3.5);
+          updateMeter(level);
+          animId = requestAnimationFrame(tick);
+        };
+        animId = requestAnimationFrame(tick);
+      } catch (err) {
+        errorEl.textContent = 'Mic access error: ' + (err.message || 'Permission denied');
+        errorEl.style.display = 'block';
+        cleanup();
+      }
+    });
+  </script>
+</body>
+</html>
+
