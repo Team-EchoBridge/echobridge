@@ -13,7 +13,7 @@ import { encodeSentenceAudio } from './audioEncoder.js';
  *
  * Encoding:
  * - Output format: 16 kHz, mono, 16-bit signed little-endian PCM ArrayBuffer.
- * - Logs byte length and duration of each encoded sentence.
+ * - Calls onSentenceCut with { audio, byteLength, durationSec, cutReason } when a sentence is finalized.
  *
  * @param {Object} options
  * @param {number} [options.fftSize=256] - FFT size for AnalyserNode.
@@ -74,7 +74,6 @@ export function useAudioRecorder({
     const inputSampleRate = audioContextRef.current ? audioContextRef.current.sampleRate : 44100;
     const encoded = encodeSentenceAudio(chunksToEncode, inputSampleRate);
 
-    // Log the byte length and duration of each encoded sentence as requested
     console.log(
       `[Encoded Sentence Cut] Reason: ${reason} | Duration: ${encoded.durationSec}s | Bytes: ${encoded.byteLength} B (~${(encoded.byteLength / 1024).toFixed(1)} KB) | Format: 16kHz mono 16-bit PCM`
     );
@@ -162,14 +161,11 @@ export function useAudioRecorder({
       const isAudible = rms >= silenceThreshold;
 
       if (isAudible) {
-        // Sound is active
         if (!state.isSpeaking) {
-          // Speech start
           state.isSpeaking = true;
           state.speechStartTime = now;
           state.silenceStartTime = 0;
         } else {
-          // Ongoing speech: reset any silence tracker
           state.silenceStartTime = 0;
 
           // Forced cut after maxDurationMs (6 seconds) of continuous speech
@@ -178,19 +174,14 @@ export function useAudioRecorder({
           }
         }
       } else {
-        // Sound is below silence threshold
         if (state.isSpeaking) {
           if (!state.silenceStartTime) {
-            // Silence just started
             state.silenceStartTime = now;
           } else if (now - state.silenceStartTime >= silenceDurationMs) {
-            // Silence has lasted for ~0.5s
             const speechDuration = state.silenceStartTime - state.speechStartTime;
             if (speechDuration >= minSpeechDurationMs) {
-              // Valid sentence completed
               triggerCut('silence-0.5s');
             } else {
-              // Ignore short noise burst (< 250ms)
               console.log(`[Noise Burst Ignored] Duration: ${speechDuration}ms < ${minSpeechDurationMs}ms`);
               state.isSpeaking = false;
               state.speechStartTime = 0;
@@ -244,11 +235,9 @@ export function useAudioRecorder({
       dataArrayRef.current = new Uint8Array(analyser.fftSize);
 
       // 2. Buffer PCM audio samples for encoding
-      // BufferSize 4096 gives ~92ms chunks at 44.1kHz
       const scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
       scriptProcessor.onaudioprocess = (event) => {
         const inputData = event.inputBuffer.getChannelData(0);
-        // Only collect audio while active speech is detected
         if (speechStateRef.current.isSpeaking) {
           audioChunksRef.current.push(new Float32Array(inputData));
         }
