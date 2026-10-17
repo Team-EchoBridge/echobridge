@@ -1,14 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { encodeSentenceAudio } from './audioEncoder.js';
 
 /**
  * Hook to manage microphone access, recording state, audio level metering,
- * and sentence slicing based on voice activity and silence detection.
+ * sentence slicing based on silence detection, and 16 kHz 16-bit PCM encoding.
  *
  * Slicing Rules:
  * - Speech threshold: normalized RMS > silenceThreshold (default 0.05).
  * - Silence cut: triggers after ~0.5s of continuous silence following valid speech.
  * - Max speech duration: forced cut after 6.0s of continuous speech.
  * - Noise burst filter: speech shorter than minSpeechDuration (0.25s) is discarded.
+ *
+ * Encoding:
+ * - Output format: 16 kHz, mono, 16-bit signed little-endian PCM ArrayBuffer.
+ * - Logs byte length and duration of each encoded sentence.
  *
  * @param {Object} options
  * @param {number} [options.fftSize=256] - FFT size for AnalyserNode.
@@ -17,7 +22,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
  * @param {number} [options.silenceDurationMs=500] - Duration of silence (ms) to trigger a sentence cut (~0.5s).
  * @param {number} [options.maxDurationMs=6000] - Forced cut duration (ms) for continuous speech (6s).
  * @param {number} [options.minSpeechDurationMs=250] - Minimum speech duration (ms) to ignore short noise bursts.
- * @param {Function} [options.onSentenceCut] - Callback invoked on cut: ({ startTime, durationMs, cutReason }).
+ * @param {Function} [options.onSentenceCut] - Callback invoked on cut: ({ audio, byteLength, durationSec, cutReason }).
  */
 export function useAudioRecorder({
   fftSize = 256,
@@ -32,6 +37,7 @@ export function useAudioRecorder({
   const [micPermission, setMicPermission] = useState('prompt'); // 'prompt' | 'granted' | 'denied'
   const [audioLevel, setAudioLevel] = useState(0); // 0.0 to 1.0 (normalized volume)
   const [sentencesCutCount, setSentencesCutCount] = useState(0);
+  const [lastEncodedInfo, setLastEncodedInfo] = useState(null); // { byteLength, durationSec }
   const [error, setError] = useState(null);
 
   const audioContextRef = useRef(null);
@@ -39,6 +45,10 @@ export function useAudioRecorder({
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
   const dataArrayRef = useRef(null);
+  const scriptProcessorRef = useRef(null);
+
+  // Audio sample buffer for current sentence
+  const audioChunksRef = useRef([]);
 
   // VAD / sentence slicing tracking refs
   const speechStateRef = useRef({
@@ -57,14 +67,29 @@ export function useAudioRecorder({
     const now = Date.now();
     const durationMs = state.speechStartTime ? now - state.speechStartTime : 0;
 
-    // Log each cut with start time and duration as requested
-    console.log(`[Sentence Cut] Reason: ${reason} | Start: ${new Date(state.speechStartTime).toISOString()} | Duration: ${durationMs}ms`);
+    // Grab accumulated audio chunks
+    const chunksToEncode = [...audioChunksRef.current];
+    audioChunksRef.current = [];
+
+    const inputSampleRate = audioContextRef.current ? audioContextRef.current.sampleRate : 44100;
+    const encoded = encodeSentenceAudio(chunksToEncode, inputSampleRate);
+
+    // Log the byte length and duration of each encoded sentence as requested
+    console.log(
+      `[Encoded Sentence Cut] Reason: ${reason} | Duration: ${encoded.durationSec}s | Bytes: ${encoded.byteLength} B (~${(encoded.byteLength / 1024).toFixed(1)} KB) | Format: 16kHz mono 16-bit PCM`
+    );
 
     setSentencesCutCount((prev) => prev + 1);
+    setLastEncodedInfo({
+      byteLength: encoded.byteLength,
+      durationSec: encoded.durationSec,
+    });
 
     if (onSentenceCutRef.current) {
       onSentenceCutRef.current({
-        startTime: state.speechStartTime,
+        audio: encoded.audio,
+        byteLength: encoded.byteLength,
+        durationSec: encoded.durationSec,
         durationMs,
         cutReason: reason,
       });
@@ -82,6 +107,11 @@ export function useAudioRecorder({
       animFrameRef.current = null;
     }
 
+    if (scriptProcessorRef.current) {
+      scriptProcessorRef.current.disconnect();
+      scriptProcessorRef.current = null;
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -94,6 +124,7 @@ export function useAudioRecorder({
 
     analyserRef.current = null;
     dataArrayRef.current = null;
+    audioChunksRef.current = [];
 
     speechStateRef.current = {
       isSpeaking: false,
@@ -116,7 +147,6 @@ export function useAudioRecorder({
       // Compute Root Mean Square (RMS) of audio samples normalized to 0.0 - 1.0
       let sumSquares = 0;
       for (let i = 0; i < dataArray.length; i++) {
-        // Sample byte is 0-255, midpoint is 128
         const normalized = (dataArray[i] - 128) / 128;
         sumSquares += normalized * normalized;
       }
@@ -165,6 +195,7 @@ export function useAudioRecorder({
               state.isSpeaking = false;
               state.speechStartTime = 0;
               state.silenceStartTime = 0;
+              audioChunksRef.current = [];
             }
           }
         }
@@ -202,20 +233,37 @@ export function useAudioRecorder({
       }
 
       const source = audioCtx.createMediaStreamSource(stream);
+
+      // 1. Analyser for volume metering and silence/VAD detection
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = fftSize;
       analyser.smoothingTimeConstant = smoothingTimeConstant;
-
       source.connect(analyser);
 
       analyserRef.current = analyser;
       dataArrayRef.current = new Uint8Array(analyser.fftSize);
+
+      // 2. Buffer PCM audio samples for encoding
+      // BufferSize 4096 gives ~92ms chunks at 44.1kHz
+      const scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+      scriptProcessor.onaudioprocess = (event) => {
+        const inputData = event.inputBuffer.getChannelData(0);
+        // Only collect audio while active speech is detected
+        if (speechStateRef.current.isSpeaking) {
+          audioChunksRef.current.push(new Float32Array(inputData));
+        }
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioCtx.destination);
+      scriptProcessorRef.current = scriptProcessor;
 
       speechStateRef.current = {
         isSpeaking: false,
         speechStartTime: 0,
         silenceStartTime: 0,
       };
+      audioChunksRef.current = [];
 
       processAudioLoop();
       setIsRecording(true);
@@ -233,7 +281,6 @@ export function useAudioRecorder({
   }, [cleanupAudio, fftSize, processAudioLoop, smoothingTimeConstant]);
 
   const stopRecording = useCallback(() => {
-    // If speaking when stopped, finalize sentence cut if it exceeded minimum speech duration
     const state = speechStateRef.current;
     if (state.isSpeaking && state.speechStartTime) {
       const speechDuration = Date.now() - state.speechStartTime;
@@ -264,6 +311,7 @@ export function useAudioRecorder({
     micPermission,
     audioLevel,
     sentencesCutCount,
+    lastEncodedInfo,
     error,
     startRecording,
     stopRecording,

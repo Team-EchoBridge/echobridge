@@ -7,7 +7,7 @@ import { AudioLevelMeter } from './AudioLevelMeter.jsx';
  * - Start / Stop recording button
  * - Live permission status feedback
  * - Visual audio level meter
- * - Sentences cut counter
+ * - Sentences cut counter and encoded PCM stats
  */
 export function SpeakerMicControl() {
   const {
@@ -15,6 +15,7 @@ export function SpeakerMicControl() {
     micPermission,
     audioLevel,
     sentencesCutCount,
+    lastEncodedInfo,
     error,
     toggleRecording,
   } = useAudioRecorder();
@@ -56,10 +57,19 @@ export function SpeakerMicControl() {
         <AudioLevelMeter level={audioLevel} isActive={isRecording} />
       </div>
 
-      {/* Sentences cut counter */}
+      {/* Sentences cut counter & encoded stats */}
       <div style={counterBoxStyle}>
-        <span style={counterLabelStyle}>Sentences cut:</span>
-        <span style={counterValueStyle}>{sentencesCutCount}</span>
+        <div style={statRowStyle}>
+          <span style={counterLabelStyle}>Sentences cut:</span>
+          <span style={counterValueStyle}>{sentencesCutCount}</span>
+        </div>
+
+        {lastEncodedInfo && (
+          <div style={encodedStatsStyle}>
+            <span>Last PCM: {lastEncodedInfo.durationSec}s</span>
+            <span>{(lastEncodedInfo.byteLength / 1024).toFixed(1)} KB (16 kHz mono)</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -119,11 +129,17 @@ const meterContainerStyle = {
 
 const counterBoxStyle = {
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
+  flexDirection: 'column',
+  gap: '6px',
   marginTop: '1rem',
   paddingTop: '0.75rem',
   borderTop: '1px solid #1e293b',
+};
+
+const statRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
   fontSize: '0.85rem',
 };
 
@@ -141,6 +157,14 @@ const counterValueStyle = {
   padding: '0.15rem 0.6rem',
   borderRadius: '4px',
   border: '1px solid #0284c744',
+};
+
+const encodedStatsStyle = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  fontSize: '0.75rem',
+  color: '#64748b',
+  fontFamily: 'monospace',
 };
 
 const errorBannerStyle = {
