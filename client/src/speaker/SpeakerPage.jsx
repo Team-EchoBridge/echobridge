@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { createRoom, joinRoom, onRoomCount } from '../shared/socket.js';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createRoom, joinRoom, sendUtterance, onRoomCount, onUtteranceError } from '../shared/socket.js';
 import { QRCode } from './QRCode.jsx';
 import { SpeakerMicControl } from './SpeakerMicControl.jsx';
 
@@ -11,7 +11,9 @@ import { SpeakerMicControl } from './SpeakerMicControl.jsx';
  * 3. Speaker room join ('room:join')
  * 4. Network address field (editable for LAN/Wi-Fi phone access)
  * 5. Display of Join Link, QR Code, and real-time Listener Count ('room:count')
- * 6. Microphone permission, start/stop speaking, and audio level meter
+ * 6. Microphone permission, start/stop speaking, audio level meter, and sentence cutting
+ * 7. Utterance emission ({ roomId, srcLang, seq, audio, tSent }) with seq starting from 1
+ * 8. Error handling for 'utterance:error' from server
  */
 export function SpeakerPage() {
   const [srcLang, setSrcLang] = useState('hi');
@@ -19,10 +21,15 @@ export function SpeakerPage() {
   const [listenerCount, setListenerCount] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState(null);
+  const [utteranceError, setUtteranceError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [currentSeq, setCurrentSeq] = useState(0);
   const [networkAddress, setNetworkAddress] = useState(() => {
     return typeof window !== 'undefined' ? window.location.origin : '';
   });
+
+  // Keep seq in a ref to avoid stale closure issues during async sentence cuts
+  const seqRef = useRef(0);
 
   // Subscribe to room:count updates
   useEffect(() => {
@@ -35,9 +42,26 @@ export function SpeakerPage() {
     };
   }, []);
 
+  // Subscribe to utterance:error events from the server
+  useEffect(() => {
+    const unsubscribeError = onUtteranceError(({ seq, message }) => {
+      console.warn(`[Utterance Error] Seq #${seq}: ${message}`);
+      setUtteranceError(`Utterance #${seq} error: ${message}`);
+      // Clear error toast after 6 seconds
+      setTimeout(() => {
+        setUtteranceError((prev) => (prev?.includes(`Utterance #${seq}`) ? null : prev));
+      }, 6000);
+    });
+
+    return () => {
+      if (unsubscribeError) unsubscribeError();
+    };
+  }, []);
+
   const handleCreateRoom = async (e) => {
     e.preventDefault();
     setError(null);
+    setUtteranceError(null);
     setIsCreating(true);
 
     try {
@@ -45,6 +69,9 @@ export function SpeakerPage() {
       const res = await createRoom(srcLang);
       if (res && res.roomId) {
         setRoomId(res.roomId);
+        // Reset seq for the new room (starts at 1 per room per contracts.md)
+        seqRef.current = 0;
+        setCurrentSeq(0);
 
         // 2. Speaker calls room:join so it receives transcript/caption events (per contracts.md)
         await joinRoom(res.roomId, 'en');
@@ -58,6 +85,42 @@ export function SpeakerPage() {
       setIsCreating(false);
     }
   };
+
+  /**
+   * Called by useAudioRecorder when a sentence is cut and encoded to 16 kHz PCM.
+   * Emits the 'utterance' event strictly conforming to docs/contracts.md:
+   * payload: { roomId, srcLang, seq, audio, tSent }
+   */
+  const handleSentenceAudio = useCallback(({ audio, byteLength, durationSec }) => {
+    if (!roomId) {
+      console.warn('Utterance ignored: No active room created.');
+      return;
+    }
+
+    if (!audio || byteLength === 0) {
+      console.warn('Utterance ignored: Empty audio buffer.');
+      return;
+    }
+
+    // Increment seq starting at 1 for this room
+    seqRef.current += 1;
+    const nextSeq = seqRef.current;
+    setCurrentSeq(nextSeq);
+
+    const payload = {
+      roomId,
+      srcLang,
+      seq: nextSeq,
+      audio, // ArrayBuffer 16-bit signed LE PCM, 16000 Hz, mono
+      tSent: Date.now(),
+    };
+
+    console.log(
+      `[Emitting Utterance] Room: ${payload.roomId} | Seq: #${payload.seq} | Lang: ${payload.srcLang} | Size: ${byteLength} B (~${(byteLength / 1024).toFixed(1)} KB) | Duration: ${durationSec}s | tSent: ${payload.tSent}`
+    );
+
+    sendUtterance(payload);
+  }, [roomId, srcLang]);
 
   // Strip trailing slashes from networkAddress to keep URLs clean
   const cleanBaseUrl = (networkAddress || '').replace(/\/+$/, '');
@@ -84,6 +147,12 @@ export function SpeakerPage() {
       {error && (
         <div style={errorBannerStyle} role="alert">
           {error}
+        </div>
+      )}
+
+      {utteranceError && (
+        <div style={utteranceErrorBannerStyle} role="alert">
+          <strong>Notice:</strong> {utteranceError}
         </div>
       )}
 
@@ -191,10 +260,13 @@ export function SpeakerPage() {
             </div>
           </div>
 
-          {/* Right Column: Microphone controls */}
+          {/* Right Column: Microphone controls with Step 5 utterance integration */}
           <div style={cardStyle}>
             <h2 style={sectionTitleStyle}>2. Live Audio Stream</h2>
-            <SpeakerMicControl />
+            <SpeakerMicControl
+              onSentenceAudio={handleSentenceAudio}
+              seq={currentSeq}
+            />
           </div>
         </div>
       )}
@@ -468,6 +540,16 @@ const copyButtonStyle = {
 const errorBannerStyle = {
   backgroundColor: '#7f1d1d',
   color: '#fecaca',
+  padding: '0.75rem 1rem',
+  borderRadius: '8px',
+  fontSize: '0.9rem',
+  marginBottom: '1.5rem',
+};
+
+const utteranceErrorBannerStyle = {
+  backgroundColor: '#451a03',
+  color: '#fdba74',
+  border: '1px solid #ea580c88',
   padding: '0.75rem 1rem',
   borderRadius: '8px',
   fontSize: '0.9rem',

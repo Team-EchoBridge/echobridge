@@ -1,0 +1,19 @@
+{
+  "name": "echobridge-nlp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EchoBridge NLP module for Speech-to-Text and Translation with Number Guard",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "cli": "node scripts/cli.js",
+    "accuracy": "node scripts/accuracy.js"
+  },
+  "dependencies": {
+    "@google-cloud/speech": "^6.7.0",
+    "@google-cloud/translate": "^8.5.0",
+    "dotenv": "^16.4.5"
+  }
+}
+
