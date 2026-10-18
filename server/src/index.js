@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import { createRoom, joinRoom, getRoom, getListenerCount, removeSocketFromRooms } from './rooms.js';
 import { TimingTracker } from './timings.js';
 import { processUtterance, getCachedTranslation, setCachedTranslation } from './nlpAdapter.js';
-
+import { getReplay } from './replay.js';
 import { getLocalIpAddress } from './network.js';
 
 dotenv.config({ path: '../.env' });
@@ -83,15 +83,26 @@ io.on('connection', (socket) => {
     const timings = new TimingTracker(tSent);
 
     try {
-      // Step 1: Speech to Text & Translation
-      // Target languages for listeners in this room (currently default 'en')
+      let nlpResult;
       const targetLangs = ['en'];
 
-      const nlpResult = await processUtterance({
-        audio,
-        srcLang: srcLang || room.srcLang,
-        tgtLangs: targetLangs
-      });
+      // If replayId is set, server returns the cached output for that id and skips NLP module
+      if (replayId) {
+        const replayed = getReplay(replayId);
+        if (replayed) {
+          nlpResult = JSON.parse(JSON.stringify(replayed));
+        } else {
+          socket.emit('utterance:error', { seq: seq || 0, message: `Replay ID not found: ${replayId}` });
+          return;
+        }
+      } else {
+        // Step 1: Speech to Text & Translation
+        nlpResult = await processUtterance({
+          audio,
+          srcLang: srcLang || room.srcLang,
+          tgtLangs: targetLangs
+        });
+      }
 
       // Mark STT stage complete
       timings.markSttDone();

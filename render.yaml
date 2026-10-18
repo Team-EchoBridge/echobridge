@@ -1,0 +1,17 @@
+services:
+  # EchoBridge Backend Server
+  - type: web
+    name: echobridge-server
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node src/index.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
+
