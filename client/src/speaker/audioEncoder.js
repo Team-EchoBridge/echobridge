@@ -1,10 +1,11 @@
 /**
- * Audio encoder for EchoBridge Speaker (docs/contracts.md specification):
+ * Audio encoder and WAV builder for EchoBridge Speaker (docs/contracts.md specification):
  * - Resamples audio from the input sample rate (e.g. 44.1 kHz / 48 kHz) to 16,000 Hz.
  * - Downmixes multiple channels to single-channel (mono).
  * - Quantizes float samples (-1.0 to +1.0) into 16-bit signed little-endian PCM integers.
  * - Caps sentence audio at 6 seconds (16,000 * 6 = 96,000 samples = 192,000 bytes = ~192 KB).
  * - Returns an ArrayBuffer suitable for the `utterance` event payload.
+ * - Builds valid 16 kHz mono 16-bit PCM WAV Blobs for recording export.
  */
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -47,11 +48,11 @@ export function resampleTo16kHz(inputSamples, inputSampleRate) {
  * Converts Float32Array samples (-1.0 to 1.0) into a 16-bit signed little-endian PCM ArrayBuffer.
  *
  * @param {Float32Array} floatSamples
+ * @param {number} [maxSamples=MAX_TARGET_SAMPLES]
  * @returns {ArrayBuffer}
  */
-export function floatTo16BitPCM(floatSamples) {
-  // Enforce max 6 seconds limit (~192 KB)
-  const sampleCount = Math.min(floatSamples.length, MAX_TARGET_SAMPLES);
+export function floatTo16BitPCM(floatSamples, maxSamples = MAX_TARGET_SAMPLES) {
+  const sampleCount = Math.min(floatSamples.length, maxSamples);
   const buffer = new ArrayBuffer(sampleCount * 2); // 2 bytes per 16-bit sample
   const view = new DataView(buffer);
 
@@ -109,3 +110,52 @@ export function encodeSentenceAudio(chunks, inputSampleRate) {
   };
 }
 
+/**
+ * Builds a standard RIFF/WAV header (44 bytes) for 16 kHz mono 16-bit PCM.
+ *
+ * @param {number} pcmByteLength - Total bytes in the PCM data chunk.
+ * @returns {ArrayBuffer} 44-byte WAV header.
+ */
+export function createWavHeader(pcmByteLength) {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  // Helper to write ASCII strings
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  /* RIFF chunk descriptor */
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + pcmByteLength, true); // file length - 8
+  writeString(8, 'WAVE');
+
+  /* "fmt " sub-chunk */
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
+  view.setUint16(22, 1, true); // NumChannels (1 = Mono)
+  view.setUint32(24, TARGET_SAMPLE_RATE, true); // SampleRate (16000)
+  view.setUint32(28, TARGET_SAMPLE_RATE * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
+  view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample/8)
+  view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+
+  /* "data" sub-chunk */
+  writeString(36, 'data');
+  view.setUint32(40, pcmByteLength, true); // Subchunk2Size
+
+  return header;
+}
+
+/**
+ * Creates a complete .wav Blob from 16-bit signed little-endian PCM ArrayBuffer.
+ *
+ * @param {ArrayBuffer} pcmBuffer
+ * @returns {Blob}
+ */
+export function pcmToWavBlob(pcmBuffer) {
+  const wavHeader = createWavHeader(pcmBuffer.byteLength);
+  return new Blob([wavHeader, pcmBuffer], { type: 'audio/wav' });
+}
