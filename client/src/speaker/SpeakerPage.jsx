@@ -11,6 +11,7 @@ import {
 import { QRCode } from './QRCode.jsx';
 import { SpeakerMicControl } from './SpeakerMicControl.jsx';
 import { SpeakerFeedback } from './SpeakerFeedback.jsx';
+import { ReplayControls } from './ReplayControls.jsx';
 
 /**
  * Top-level SpeakerPage component mountable at /speak
@@ -21,10 +22,10 @@ import { SpeakerFeedback } from './SpeakerFeedback.jsx';
  * 4. Network address field (editable for LAN/Wi-Fi phone access)
  * 5. Display of Join Link, QR Code, and real-time Listener Count ('room:count')
  * 6. Microphone permission, start/stop speaking, audio level meter, and sentence cutting
- * 7. Utterance emission ({ roomId, srcLang, seq, audio, tSent }) with seq starting from 1
+ * 7. Utterance emission ({ roomId, srcLang, seq, audio, tSent, replayId? })
  * 8. Error handling for 'utterance:error' from server
  * 9. Live recognized speech feedback (transcript and caption events) with "Unclear, please repeat" banner
- * 10. Developer test buttons for simulating transcript events (normal and unclear)
+ * 10. Replay Mode toggle, pre-recorded phrase selector, and prominent "REPLAY" banner
  */
 export function SpeakerPage() {
   const [srcLang, setSrcLang] = useState('hi');
@@ -35,7 +36,8 @@ export function SpeakerPage() {
   const [utteranceError, setUtteranceError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [currentSeq, setCurrentSeq] = useState(0);
-  const [recognition, setRecognition] = useState(null); // { seq, srcText, tgtText, unclear, timings }
+  const [recognition, setRecognition] = useState(null);
+  const [isReplayMode, setIsReplayMode] = useState(false);
   const [networkAddress, setNetworkAddress] = useState(() => {
     return typeof window !== 'undefined' ? window.location.origin : '';
   });
@@ -59,7 +61,6 @@ export function SpeakerPage() {
     const unsubscribeError = onUtteranceError(({ seq, message }) => {
       console.warn(`[Utterance Error] Seq #${seq}: ${message}`);
       setUtteranceError(`Utterance #${seq} error: ${message}`);
-      // Clear error toast after 6 seconds
       setTimeout(() => {
         setUtteranceError((prev) => (prev?.includes(`Utterance #${seq}`) ? null : prev));
       }, 6000);
@@ -70,7 +71,7 @@ export function SpeakerPage() {
     };
   }, []);
 
-  // Step 6: Subscribe to transcript events (sent as soon as STT finishes)
+  // Subscribe to transcript events (sent as soon as STT finishes)
   useEffect(() => {
     const unsubscribeTranscript = onTranscript((data) => {
       console.log('[Received transcript]', data);
@@ -88,7 +89,7 @@ export function SpeakerPage() {
     };
   }, []);
 
-  // Step 6: Subscribe to caption events (sent after translation and number guard)
+  // Subscribe to caption events (sent after translation and number guard)
   useEffect(() => {
     const unsubscribeCaption = onCaption((data) => {
       console.log('[Received caption]', data);
@@ -113,16 +114,13 @@ export function SpeakerPage() {
     setIsCreating(true);
 
     try {
-      // 1. Emit room:create with { srcLang }
       const res = await createRoom(srcLang);
       if (res && res.roomId) {
         setRoomId(res.roomId);
-        // Reset seq for the new room (starts at 1 per room per contracts.md)
         seqRef.current = 0;
         setCurrentSeq(0);
         setRecognition(null);
 
-        // 2. Speaker calls room:join so it receives transcript/caption events (per contracts.md)
         await joinRoom(res.roomId, 'en');
       } else {
         setError('Server returned empty room ID.');
@@ -136,9 +134,7 @@ export function SpeakerPage() {
   };
 
   /**
-   * Called by useAudioRecorder when a sentence is cut and encoded to 16 kHz PCM.
-   * Emits the 'utterance' event strictly conforming to docs/contracts.md:
-   * payload: { roomId, srcLang, seq, audio, tSent }
+   * Called when live audio is cut and encoded.
    */
   const handleSentenceAudio = useCallback(({ audio, byteLength, durationSec }) => {
     if (!roomId) {
@@ -151,7 +147,6 @@ export function SpeakerPage() {
       return;
     }
 
-    // Increment seq starting at 1 for this room
     seqRef.current += 1;
     const nextSeq = seqRef.current;
     setCurrentSeq(nextSeq);
@@ -160,18 +155,56 @@ export function SpeakerPage() {
       roomId,
       srcLang,
       seq: nextSeq,
-      audio, // ArrayBuffer 16-bit signed LE PCM, 16000 Hz, mono
+      audio,
       tSent: Date.now(),
     };
 
     console.log(
-      `[Emitting Utterance] Room: ${payload.roomId} | Seq: #${payload.seq} | Lang: ${payload.srcLang} | Size: ${byteLength} B (~${(byteLength / 1024).toFixed(1)} KB) | Duration: ${durationSec}s | tSent: ${payload.tSent}`
+      `[Emitting Utterance (Live)] Room: ${payload.roomId} | Seq: #${payload.seq} | Lang: ${payload.srcLang} | Size: ${byteLength} B | Duration: ${durationSec}s | tSent: ${payload.tSent}`
     );
 
     sendUtterance(payload);
   }, [roomId, srcLang]);
 
-  // Developer simulation triggers (Step 6 testing without server)
+  /**
+   * Called by ReplayControls to emit a pre-recorded phrase with replayId.
+   */
+  const handleSendReplayUtterance = useCallback(({ replayId, phraseText, audio }) => {
+    if (!roomId) {
+      console.warn('Replay utterance ignored: No active room created.');
+      return;
+    }
+
+    seqRef.current += 1;
+    const nextSeq = seqRef.current;
+    setCurrentSeq(nextSeq);
+
+    const payload = {
+      roomId,
+      srcLang,
+      seq: nextSeq,
+      audio: audio || new ArrayBuffer(0),
+      tSent: Date.now(),
+      replayId,
+    };
+
+    console.log(
+      `[Emitting Utterance (Replay)] Room: ${payload.roomId} | Seq: #${payload.seq} | Lang: ${payload.srcLang} | ReplayID: ${payload.replayId} | tSent: ${payload.tSent}`
+    );
+
+    sendUtterance(payload);
+
+    // Provide immediate local preview of the selected replay phrase
+    setRecognition({
+      seq: nextSeq,
+      srcText: phraseText,
+      tgtText: '(Awaiting server replay output...)',
+      unclear: false,
+      timings: { tSent: payload.tSent, tSttDone: Date.now() },
+    });
+  }, [roomId, srcLang]);
+
+  // Developer simulation triggers
   const handleSimulateTranscript = (isUnclear) => {
     const fakeSeq = (recognition?.seq || currentSeq || 0) + 1;
     const now = Date.now();
@@ -198,7 +231,6 @@ export function SpeakerPage() {
     }
   };
 
-  // Strip trailing slashes from networkAddress to keep URLs clean
   const cleanBaseUrl = (networkAddress || '').replace(/\/+$/, '');
   const joinUrl = roomId && cleanBaseUrl
     ? `${cleanBaseUrl}/join/${roomId}`
@@ -215,7 +247,14 @@ export function SpeakerPage() {
   return (
     <div style={containerStyle}>
       <header style={headerStyle}>
-        <div style={brandBadgeStyle}>EchoBridge</div>
+        <div style={headerTopRowStyle}>
+          <div style={brandBadgeStyle}>EchoBridge</div>
+          {isReplayMode && (
+            <div style={topReplayBadgeStyle}>
+              ⚠️ REPLAY MODE ACTIVE - NOT LIVE MIC
+            </div>
+          )}
+        </div>
         <h1 style={titleStyle}>Speaker Console</h1>
         <p style={subtitleStyle}>Broadcast live speech in Hindi or Marathi with real-time English translation for listeners.</p>
       </header>
@@ -336,8 +375,9 @@ export function SpeakerPage() {
             </div>
           </div>
 
-          {/* Right Column: Audio stream controls & live feedback */}
+          {/* Right Column: Audio stream controls, Replay Mode & Live Feedback */}
           <div style={rightColumnStyle}>
+            {/* Live Mic Panel */}
             <div style={cardStyle}>
               <h2 style={sectionTitleStyle}>2. Live Audio Stream</h2>
               <SpeakerMicControl
@@ -346,11 +386,19 @@ export function SpeakerPage() {
               />
             </div>
 
-            {/* Step 6: Live Recognized Speech & Unclear Banner */}
+            {/* Step 7: Replay Mode Controls */}
+            <ReplayControls
+              srcLang={srcLang}
+              isReplayMode={isReplayMode}
+              onToggleReplay={setIsReplayMode}
+              onSendReplayUtterance={handleSendReplayUtterance}
+              seq={currentSeq}
+            />
+
+            {/* Live Recognized Speech & Unclear Banner */}
             <div style={cardStyle}>
               <div style={feedbackHeaderRow}>
                 <h2 style={sectionTitleStyle}>3. Live Heard Speech</h2>
-                {/* Developer simulation controls */}
                 <div style={devControlsStyle}>
                   <span style={devTagStyle}>Dev Test:</span>
                   <button
@@ -395,6 +443,15 @@ const headerStyle = {
   marginBottom: '2rem',
 };
 
+const headerTopRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
+  gap: '10px',
+  marginBottom: '0.5rem',
+};
+
 const brandBadgeStyle = {
   display: 'inline-block',
   fontSize: '0.75rem',
@@ -406,7 +463,17 @@ const brandBadgeStyle = {
   border: '1px solid #0284c744',
   padding: '0.2rem 0.6rem',
   borderRadius: '4px',
-  marginBottom: '0.5rem',
+};
+
+const topReplayBadgeStyle = {
+  fontSize: '0.75rem',
+  fontWeight: 800,
+  letterSpacing: '0.06em',
+  color: '#f59e0b',
+  background: '#78350f44',
+  border: '1px solid #f59e0b',
+  padding: '0.25rem 0.65rem',
+  borderRadius: '6px',
 };
 
 const titleStyle = {
