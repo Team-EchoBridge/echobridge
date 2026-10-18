@@ -1,4 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { SpeakerPage } from './speaker/SpeakerPage.jsx';
+
+// Separate Listener component so hooks aren't called conditionally
+function ListenerView({ roomId }) {
+  return (
+    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
+      <h1>EchoBridge Listener</h1>
+      <p>Room: <strong>{roomId}</strong></p>
+      <p>Member 2 listener view mount point (<code>client/src/listener</code>)</p>
+    </div>
+  );
+}
 
 export default function App() {
   const [route, setRoute] = useState(window.location.pathname);
@@ -18,23 +30,12 @@ export default function App() {
   // - Speaker page: /speak
   // - Listener link: /join/:roomId
   if (route === '/speak' || route.startsWith('/speak')) {
-    return (
-      <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-        <h1>EchoBridge Speaker</h1>
-        <p>Member 1 speaker view mount point (<code>client/src/speaker</code>)</p>
-      </div>
-    );
+    return <SpeakerPage />;
   }
 
   if (route.startsWith('/join/')) {
     const roomId = route.replace('/join/', '').split('/')[0];
-    return (
-      <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-        <h1>EchoBridge Listener</h1>
-        <p>Room: <strong>{roomId}</strong></p>
-        <p>Member 2 listener view mount point (<code>client/src/listener</code>)</p>
-      </div>
-    );
+    return <ListenerView roomId={roomId} />;
   }
 
   return (
