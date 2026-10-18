@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { createRoom, joinRoom, sendUtterance, onRoomCount, onUtteranceError } from '../shared/socket.js';
+import {
+  createRoom,
+  joinRoom,
+  sendUtterance,
+  onRoomCount,
+  onTranscript,
+  onCaption,
+  onUtteranceError,
+} from '../shared/socket.js';
 import { QRCode } from './QRCode.jsx';
 import { SpeakerMicControl } from './SpeakerMicControl.jsx';
+import { SpeakerFeedback } from './SpeakerFeedback.jsx';
 
 /**
  * Top-level SpeakerPage component mountable at /speak
@@ -14,6 +23,8 @@ import { SpeakerMicControl } from './SpeakerMicControl.jsx';
  * 6. Microphone permission, start/stop speaking, audio level meter, and sentence cutting
  * 7. Utterance emission ({ roomId, srcLang, seq, audio, tSent }) with seq starting from 1
  * 8. Error handling for 'utterance:error' from server
+ * 9. Live recognized speech feedback (transcript and caption events) with "Unclear, please repeat" banner
+ * 10. Developer test buttons for simulating transcript events (normal and unclear)
  */
 export function SpeakerPage() {
   const [srcLang, setSrcLang] = useState('hi');
@@ -24,6 +35,7 @@ export function SpeakerPage() {
   const [utteranceError, setUtteranceError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [currentSeq, setCurrentSeq] = useState(0);
+  const [recognition, setRecognition] = useState(null); // { seq, srcText, tgtText, unclear, timings }
   const [networkAddress, setNetworkAddress] = useState(() => {
     return typeof window !== 'undefined' ? window.location.origin : '';
   });
@@ -58,6 +70,42 @@ export function SpeakerPage() {
     };
   }, []);
 
+  // Step 6: Subscribe to transcript events (sent as soon as STT finishes)
+  useEffect(() => {
+    const unsubscribeTranscript = onTranscript((data) => {
+      console.log('[Received transcript]', data);
+      setRecognition((prev) => ({
+        seq: data.seq,
+        srcText: data.srcText,
+        unclear: Boolean(data.unclear),
+        timings: data.timings,
+        tgtText: prev?.seq === data.seq ? prev.tgtText : '',
+      }));
+    });
+
+    return () => {
+      if (unsubscribeTranscript) unsubscribeTranscript();
+    };
+  }, []);
+
+  // Step 6: Subscribe to caption events (sent after translation and number guard)
+  useEffect(() => {
+    const unsubscribeCaption = onCaption((data) => {
+      console.log('[Received caption]', data);
+      setRecognition({
+        seq: data.seq,
+        srcText: data.srcText,
+        tgtText: data.tgtText,
+        unclear: Boolean(data.unclear),
+        timings: data.timings,
+      });
+    });
+
+    return () => {
+      if (unsubscribeCaption) unsubscribeCaption();
+    };
+  }, []);
+
   const handleCreateRoom = async (e) => {
     e.preventDefault();
     setError(null);
@@ -72,6 +120,7 @@ export function SpeakerPage() {
         // Reset seq for the new room (starts at 1 per room per contracts.md)
         seqRef.current = 0;
         setCurrentSeq(0);
+        setRecognition(null);
 
         // 2. Speaker calls room:join so it receives transcript/caption events (per contracts.md)
         await joinRoom(res.roomId, 'en');
@@ -121,6 +170,33 @@ export function SpeakerPage() {
 
     sendUtterance(payload);
   }, [roomId, srcLang]);
+
+  // Developer simulation triggers (Step 6 testing without server)
+  const handleSimulateTranscript = (isUnclear) => {
+    const fakeSeq = (recognition?.seq || currentSeq || 0) + 1;
+    const now = Date.now();
+    if (isUnclear) {
+      setRecognition({
+        seq: fakeSeq,
+        srcText: '',
+        tgtText: '',
+        unclear: true,
+        timings: { tSent: now - 900, tSttDone: now, tServerIn: now - 850 },
+      });
+    } else {
+      const phrase = srcLang === 'mr'
+        ? 'खोलीचे भाडे पाचशे रुपये आहे'
+        : 'कमरा का किराया पाँच सौ रुपये है';
+      const translation = 'The room rent is five hundred rupees.';
+      setRecognition({
+        seq: fakeSeq,
+        srcText: phrase,
+        tgtText: translation,
+        unclear: false,
+        timings: { tSent: now - 650, tSttDone: now, tServerIn: now - 600 },
+      });
+    }
+  };
 
   // Strip trailing slashes from networkAddress to keep URLs clean
   const cleanBaseUrl = (networkAddress || '').replace(/\/+$/, '');
@@ -260,13 +336,44 @@ export function SpeakerPage() {
             </div>
           </div>
 
-          {/* Right Column: Microphone controls with Step 5 utterance integration */}
-          <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>2. Live Audio Stream</h2>
-            <SpeakerMicControl
-              onSentenceAudio={handleSentenceAudio}
-              seq={currentSeq}
-            />
+          {/* Right Column: Audio stream controls & live feedback */}
+          <div style={rightColumnStyle}>
+            <div style={cardStyle}>
+              <h2 style={sectionTitleStyle}>2. Live Audio Stream</h2>
+              <SpeakerMicControl
+                onSentenceAudio={handleSentenceAudio}
+                seq={currentSeq}
+              />
+            </div>
+
+            {/* Step 6: Live Recognized Speech & Unclear Banner */}
+            <div style={cardStyle}>
+              <div style={feedbackHeaderRow}>
+                <h2 style={sectionTitleStyle}>3. Live Heard Speech</h2>
+                {/* Developer simulation controls */}
+                <div style={devControlsStyle}>
+                  <span style={devTagStyle}>Dev Test:</span>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateTranscript(false)}
+                    style={devBtnStyle}
+                    title="Simulate normal recognized transcript event"
+                  >
+                    Simulate Normal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateTranscript(true)}
+                    style={{ ...devBtnStyle, borderColor: '#f59e0b88', color: '#f59e0b' }}
+                    title="Simulate unclear transcript event"
+                  >
+                    Simulate Unclear
+                  </button>
+                </div>
+              </div>
+
+              <SpeakerFeedback recognition={recognition} />
+            </div>
           </div>
         </div>
       )}
@@ -276,7 +383,7 @@ export function SpeakerPage() {
 
 // Styling definitions adhering to clean modern dark layout
 const containerStyle = {
-  maxWidth: '920px',
+  maxWidth: '960px',
   margin: '0 auto',
   padding: '2rem 1.5rem',
   fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -326,7 +433,14 @@ const cardStyle = {
 
 const activeGridStyle = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+  gap: '1.5rem',
+  alignItems: 'start',
+};
+
+const rightColumnStyle = {
+  display: 'flex',
+  flexDirection: 'column',
   gap: '1.5rem',
 };
 
@@ -535,6 +649,41 @@ const copyButtonStyle = {
   fontWeight: 600,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+};
+
+const feedbackHeaderRow = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: '8px',
+  marginBottom: '1rem',
+};
+
+const devControlsStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '6px',
+  marginBottom: '1.25rem',
+};
+
+const devTagStyle = {
+  fontSize: '0.7rem',
+  color: '#64748b',
+  textTransform: 'uppercase',
+  fontWeight: 700,
+};
+
+const devBtnStyle = {
+  padding: '0.3rem 0.6rem',
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  background: '#1e293b',
+  color: '#38bdf8',
+  border: '1px solid #0284c755',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  transition: 'background 0.15s ease',
 };
 
 const errorBannerStyle = {
