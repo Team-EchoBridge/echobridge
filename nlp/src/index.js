@@ -1,7 +1,15 @@
 /**
  * EchoBridge NLP Module (Member 4)
  * Source of truth: docs/contracts.md
+ *
+ * Full End-to-End Pipeline:
+ * Audio -> STT (with SpeechContexts) -> Extract Numbers -> Translate -> Number Guard & Unclear Gate -> Result & Timings
  */
+
+import { recognizeSpeech } from './stt.js';
+import { translateText } from './translate.js';
+import { extractNumbers } from './numbers.js';
+import { crossCheckNumbers, isUnclear } from './guard.js';
 
 /**
  * Process an incoming audio utterance and return recognized text,
@@ -9,8 +17,9 @@
  *
  * @param {Object} params
  * @param {ArrayBuffer|Buffer|Uint8Array} params.audio - 16-bit PCM, 16000Hz, mono audio buffer
- * @param {"hi"|"mr"} params.srcLang - Source language code
+ * @param {"hi"|"mr"} [params.srcLang='hi'] - Source language code
  * @param {Array<string>} [params.tgtLangs=['en']] - Target languages requested
+ * @param {Object} [params.options] - Optional custom clients or configurations (e.g. for testing)
  * @returns {Promise<{
  *   srcText: string,
  *   translations: Record<string, string>,
@@ -25,58 +34,87 @@
  *   timings: { sttMs: number, translateMs: number, guardMs: number }
  * }>}
  */
-export async function process({ audio, srcLang = 'hi', tgtLangs = ['en'] }) {
-  const startTime = Date.now();
+export async function process({
+  audio,
+  srcLang = 'hi',
+  tgtLangs = ['en'],
+  options = {}
+}) {
+  const emptyTranslations = {};
+  for (const lang of tgtLangs) {
+    emptyTranslations[lang] = '';
+  }
 
-  // Baseline contract skeleton mock data (Step 2)
-  // Replaced with real STT -> Translate -> Guard pipeline in later steps
-  if (srcLang === 'mr') {
+  // 1. Speech Recognition (STT)
+  const sttResult = await recognizeSpeech({
+    audio,
+    srcLang,
+    client: options.sttClient
+  });
+
+  const { srcText, confidence, sttMs } = sttResult;
+
+  // Unclear Gate Stage 1: check if speech was unrecognized or low confidence
+  if (sttResult.unclear || isUnclear({ srcText, confidence })) {
     return {
-      srcText: 'चेक आउट ची वेळ सकाळी अकरा वाजता आहे',
-      translations: {
-        en: tgtLangs.includes('en') ? 'The check-out time is eleven in the morning.' : ''
-      },
-      numbers: [
-        {
-          value: 11,
-          kind: 'time',
-          spoken: 'अकरा',
-          verified: true
-        }
-      ],
-      confidence: 0.96,
-      unclear: false,
+      srcText: srcText || '',
+      translations: emptyTranslations,
+      numbers: [],
+      confidence: confidence || 0,
+      unclear: true,
       timings: {
-        sttMs: 120,
-        translateMs: 80,
-        guardMs: 10
+        sttMs,
+        translateMs: 0,
+        guardMs: 0
       }
     };
   }
 
-  // Default to Hindi mock
-  return {
-    srcText: 'कमरा का किराया पाँच सौ रुपये है',
-    translations: {
-      en: tgtLangs.includes('en') ? 'The room rent is five hundred rupees.' : ''
-    },
-    numbers: [
-      {
-        value: 500,
-        kind: 'price',
-        spoken: 'पाँच सौ',
-        verified: true
+  // 2. Translation
+  const translateResult = await translateText({
+    text: srcText,
+    srcLang,
+    tgtLangs,
+    client: options.translateClient
+  });
+
+  const { translations, translateMs } = translateResult;
+
+  // Unclear Gate Stage 2: check if translation failed completely
+  if (translateResult.unclear) {
+    return {
+      srcText,
+      translations: emptyTranslations,
+      numbers: [],
+      confidence,
+      unclear: true,
+      timings: {
+        sttMs,
+        translateMs,
+        guardMs: 0
       }
-    ],
-    confidence: 0.95,
+    };
+  }
+
+  // 3. Extract numbers and apply Guard cross-check
+  const tGuardStart = Date.now();
+  const rawNumbers = extractNumbers(srcText, srcLang);
+  const primaryTranslation = translations[tgtLangs[0]] || translations.en || '';
+  const verifiedNumbers = crossCheckNumbers(rawNumbers, primaryTranslation);
+  const guardMs = Date.now() - tGuardStart;
+
+  return {
+    srcText,
+    translations,
+    numbers: verifiedNumbers,
+    confidence,
     unclear: false,
     timings: {
-      sttMs: 110,
-      translateMs: 75,
-      guardMs: 10
+      sttMs,
+      translateMs,
+      guardMs
     }
   };
 }
 
 export default { process };
-
