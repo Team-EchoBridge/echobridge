@@ -61,7 +61,9 @@ export async function processUtterance({ audio, srcLang, tgtLangs = ['en'] }) {
 
   if (nlpProcess) {
     try {
-      return await nlpProcess({ audio, srcLang, tgtLangs });
+      const res = await nlpProcess({ audio, srcLang, tgtLangs });
+      console.log('[NLP Output]', { srcText: res.srcText, unclear: res.unclear, confidence: res.confidence });
+      return res;
     } catch (err) {
       console.error('[NLP Adapter] /nlp process error, falling back to safe contract:', err);
     }
