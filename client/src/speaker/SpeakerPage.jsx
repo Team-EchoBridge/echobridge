@@ -45,6 +45,20 @@ export function SpeakerPage() {
   // Keep seq in a ref to avoid stale closure issues during async sentence cuts
   const seqRef = useRef(0);
 
+  // Auto-fetch LAN IP address from backend if speaker is opened on localhost
+  useEffect(() => {
+    fetch('http://localhost:3000/api/network')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.joinBaseUrl) {
+          setNetworkAddress(data.joinBaseUrl);
+        }
+      })
+      .catch(() => {
+        // Fallback: keep current origin
+      });
+  }, []);
+
   // Subscribe to room:count updates
   useEffect(() => {
     const unsubscribeCount = onRoomCount(({ count }) => {

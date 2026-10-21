@@ -9,8 +9,21 @@ import { processUtterance, getCachedTranslation, setCachedTranslation } from './
 import { getReplay } from './replay.js';
 import { getLocalIpAddress } from './network.js';
 
-dotenv.config({ path: '../.env' });
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Ensure GOOGLE_APPLICATION_CREDENTIALS resolves to an absolute path if set
+const rootEnvPath = path.resolve(__dirname, '../../.env');
+dotenv.config({ path: rootEnvPath });
 dotenv.config();
+
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS && !path.isAbsolute(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(__dirname, '../../', process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  console.log('[Server] Resolved GOOGLE_APPLICATION_CREDENTIALS to:', process.env.GOOGLE_APPLICATION_CREDENTIALS);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -29,6 +42,17 @@ app.use(express.json());
 // Contract: GET /health returns { ok: true }
 app.get('/health', (req, res) => {
   res.json({ ok: true });
+});
+
+// Endpoint to provide the LAN network info to clients (so speaker on localhost knows LAN IP)
+app.get('/api/network', (req, res) => {
+  const localIp = getLocalIpAddress();
+  const clientPort = process.env.CLIENT_PORT || 5173;
+  res.json({
+    ip: localIp,
+    port: clientPort,
+    joinBaseUrl: `http://${localIp}:${clientPort}`
+  });
 });
 
 io.on('connection', (socket) => {
