@@ -3,7 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { createRoom, joinRoom, getRoom, getListenerCount, removeSocketFromRooms } from './rooms.js';
+import { createRoom, joinRoom, getRoom, getListenerCount, getRoomLanguages, removeSocketFromRooms } from './rooms.js';
 import { TimingTracker } from './timings.js';
 import { processUtterance, getCachedTranslation, setCachedTranslation } from './nlpAdapter.js';
 import { getReplay } from './replay.js';
@@ -82,7 +82,8 @@ io.on('connection', (socket) => {
       const room = getRoom(roomId);
       if (room && room.speakerSocketId) {
         const count = getListenerCount(roomId);
-        io.to(room.speakerSocketId).emit('room:count', { count });
+        const { breakdown } = getRoomLanguages(roomId);
+        io.to(room.speakerSocketId).emit('room:count', { count, languages: breakdown });
       }
     } else {
       console.log(`[Room] ${socket.id} failed to join ${roomId}: ${result.error}`);
@@ -108,7 +109,8 @@ io.on('connection', (socket) => {
 
     try {
       let nlpResult;
-      const targetLangs = ['en'];
+      const { activeLanguages: targetLangs } = getRoomLanguages(roomId);
+      console.log([Utterance] Processing for languages: []);
 
       // If replayId is set, server returns the cached output for that id and skips NLP module
       if (replayId) {

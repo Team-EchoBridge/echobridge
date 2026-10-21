@@ -93,6 +93,30 @@ export function getListenerCount(roomId) {
 }
 
 /**
+ * Get active target languages breakdown for a room
+ * @param {string} roomId
+ * @returns {{ activeLanguages: string[], breakdown: Record<string, number> }}
+ */
+export function getRoomLanguages(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.listeners.size === 0) {
+    return { activeLanguages: ['en'], breakdown: {} };
+  }
+
+  const breakdown = {};
+  for (const listener of room.listeners.values()) {
+    const lang = listener.tgtLang || 'en';
+    breakdown[lang] = (breakdown[lang] || 0) + 1;
+  }
+
+  const activeLanguages = Object.keys(breakdown);
+  return {
+    activeLanguages: activeLanguages.length > 0 ? activeLanguages : ['en'],
+    breakdown
+  };
+}
+
+/**
  * Handle socket disconnection across all rooms
  * Cleans up listeners and returns array of affected rooms where listener count changed
  * @param {string} socketId
@@ -125,4 +149,3 @@ export function removeSocketFromRooms(socketId) {
 
   return affected;
 }
-
