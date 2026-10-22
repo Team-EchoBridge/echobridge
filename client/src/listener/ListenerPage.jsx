@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { joinRoom, onCaption } from '../shared/socket.js';
+import { joinRoom, onCaption, onRoomClosed } from '../shared/socket.js';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', label: 'English', defaultVoiceLang: 'en-IN', voiceMatch: ['en-IN', 'en-US', 'en-GB', 'en'] },
@@ -112,6 +112,13 @@ export function ListenerPage({ roomId }) {
       }
     });
 
+    const unsubscribeClosed = onRoomClosed(({ reason }) => {
+      if (!active) return;
+      setIsConnected(false);
+      setStatus('Session ended');
+      setError(reason || 'The speaker has ended the session.');
+    });
+
     joinRoom(roomId, selectedLang)
       .then((result) => {
         if (!active) return;
@@ -134,6 +141,7 @@ export function ListenerPage({ roomId }) {
     return () => {
       active = false;
       unsubscribe();
+      if (unsubscribeClosed) unsubscribeClosed();
     };
   }, [roomId, selectedLang]);
 
@@ -168,205 +176,256 @@ export function ListenerPage({ roomId }) {
     window.speechSynthesis.cancel();
 
     const speech = new SpeechSynthesisUtterance(translatedText);
-    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang);
     const chosenVoice = getBestVoice(selectedLang);
 
     if (chosenVoice) {
       speech.voice = chosenVoice;
       speech.lang = chosenVoice.lang;
     } else {
-      speech.lang = langConfig?.defaultVoiceLang || selectedLang;
+      const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang);
+      speech.lang = langConfig?.defaultVoiceLang || 'en-IN';
     }
 
     speech.rate = 0.9;
     window.speechSynthesis.speak(speech);
   };
 
-  const currentLangLabel =
-    SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label || selectedLang.toUpperCase();
-
-  const cardStyle = {
-    backgroundColor: '#ffffff',
-    padding: '20px',
-    borderRadius: '12px',
-    marginBottom: '16px',
-    border: '1px solid #e2e8f0',
-  };
-
   return (
-    <main
+    <div
       style={{
-        fontFamily: 'Arial, sans-serif',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
         maxWidth: '700px',
         margin: '0 auto',
-        padding: '24px',
-        color: '#1f2937',
+        padding: '24px 16px',
+        color: '#0f172a',
         backgroundColor: '#f8fafc',
         minHeight: '100vh',
-        boxSizing: 'border-box',
       }}
     >
-      <header style={{ textAlign: 'center', marginBottom: '28px' }}>
-        <h1 style={{ marginBottom: '6px' }}>EchoBridge</h1>
-        <p style={{ color: '#64748b', margin: 0 }}>Live Tour Translation</p>
+      {/* Header */}
+      <header style={{ textAlign: 'center', marginBottom: '24px' }}>
+        <h1 style={{ margin: '0 0 4px', fontSize: '28px', fontWeight: '800', letterSpacing: '-0.02em' }}>
+          EchoBridge
+        </h1>
+        <p style={{ color: '#64748b', margin: 0, fontSize: '15px' }}>Live Tour Translation</p>
       </header>
 
-      {/* Language Selector Card */}
-      <section style={cardStyle}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '12px',
-          }}
+      {/* Language Picker Header */}
+      <section
+        style={{
+          backgroundColor: '#ffffff',
+          padding: '16px',
+          borderRadius: '16px',
+          marginBottom: '16px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        }}
+      >
+        <label
+          htmlFor="lang-select"
+          style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}
         >
-          <label style={{ fontWeight: 'bold', fontSize: '15px' }}>
-            🌐 Listening Language:
-          </label>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {SUPPORTED_LANGUAGES.map((lang) => {
-              const active = lang.code === selectedLang;
-              return (
-                <button
-                  key={lang.code}
-                  type="button"
-                  onClick={() => handleLanguageChange(lang.code)}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '20px',
-                    border: active ? '2px solid #2563eb' : '1px solid #cbd5e1',
-                    backgroundColor: active ? '#eff6ff' : '#ffffff',
-                    color: active ? '#1d4ed8' : '#475569',
-                    fontWeight: active ? 'bold' : 'normal',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    transition: 'all 0.15s ease-in-out',
-                  }}
-                >
-                  {lang.label} ({lang.code})
-                </button>
-              );
-            })}
-          </div>
+          SELECT YOUR LANGUAGE
+        </label>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {SUPPORTED_LANGUAGES.map((lang) => (
+            <button
+              key={lang.code}
+              type="button"
+              onClick={() => handleLanguageChange(lang.code)}
+              style={{
+                flex: '1 1 auto',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                border: selectedLang === lang.code ? '2px solid #2563eb' : '1px solid #cbd5e1',
+                backgroundColor: selectedLang === lang.code ? '#eff6ff' : '#ffffff',
+                color: selectedLang === lang.code ? '#1d4ed8' : '#334155',
+                fontWeight: selectedLang === lang.code ? '700' : '500',
+                cursor: 'pointer',
+                fontSize: '14px',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {lang.label}
+            </button>
+          ))}
         </div>
       </section>
 
-      <section style={cardStyle}>
-        <p style={{ margin: '0 0 8px' }}>
-          <strong>Room:</strong> {roomId}
-        </p>
-
-        <p style={{ margin: 0 }}>
-          <strong>Status:</strong>{' '}
-          <span style={{ color: isConnected ? '#15803d' : '#b45309' }}>
+      {/* Room Information & Live Connection Status */}
+      <section
+        style={{
+          backgroundColor: '#ffffff',
+          padding: '16px',
+          borderRadius: '16px',
+          marginBottom: '16px',
+          border: '1px solid #e2e8f0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        }}
+      >
+        <div>
+          <span style={{ fontSize: '12px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>
+            Room Code
+          </span>
+          <div style={{ fontSize: '20px', fontWeight: '800', color: '#0f172a' }}>{roomId}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '13px',
+              fontWeight: '600',
+              padding: '4px 10px',
+              borderRadius: '9999px',
+              backgroundColor: isConnected ? '#dcfce7' : '#fee2e2',
+              color: isConnected ? '#15803d' : '#b91c1c',
+            }}
+          >
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: isConnected ? '#16a34a' : '#dc2626',
+              }}
+            />
             {status}
           </span>
-        </p>
+        </div>
       </section>
 
+      {/* Error Alert */}
       {error && (
-        <section
+        <div
           role="alert"
           style={{
-            ...cardStyle,
             backgroundColor: '#fef2f2',
-            borderColor: '#fecaca',
-            color: '#b91c1c',
+            border: '1px solid #fca5a5',
+            color: '#991b1b',
+            padding: '14px 16px',
+            borderRadius: '12px',
+            marginBottom: '16px',
+            fontSize: '14px',
+            fontWeight: '500',
           }}
         >
-          <strong>Connection issue</strong>
-          <p style={{ marginBottom: 0 }}>{error}</p>
-        </section>
+          {error}
+        </div>
       )}
 
-      <section style={cardStyle}>
-        <h2 style={{ fontSize: '16px', color: '#64748b' }}>
+      {/* Original Speech */}
+      <section
+        style={{
+          backgroundColor: '#ffffff',
+          padding: '20px',
+          borderRadius: '16px',
+          marginBottom: '16px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        }}
+      >
+        <h2 style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: '700', color: '#64748b', letterSpacing: '0.05em' }}>
           ORIGINAL SPEECH
         </h2>
-        <p style={{ fontSize: '20px', lineHeight: 1.6, overflowWrap: 'anywhere' }}>
+        <p style={{ margin: 0, fontSize: '18px', lineHeight: 1.5, color: originalText ? '#1e293b' : '#94a3b8' }}>
           {originalText || 'Waiting for the speaker...'}
         </p>
       </section>
 
-      <section style={cardStyle}>
-        <h2 style={{ fontSize: '16px', color: '#64748b' }}>
-          {currentLangLabel.toUpperCase()} TRANSLATION
+      {/* Target Language Translation */}
+      <section
+        style={{
+          backgroundColor: '#ffffff',
+          padding: '20px',
+          borderRadius: '16px',
+          marginBottom: '16px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        }}
+      >
+        <h2 style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: '700', color: '#64748b', letterSpacing: '0.05em' }}>
+          TRANSLATION ({SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label.toUpperCase()})
         </h2>
-        <p style={{ fontSize: '24px', fontWeight: 'bold', lineHeight: 1.5 }}>
-          {translatedText || `Your ${currentLangLabel} translation will appear here.`}
+        <p style={{ margin: 0, fontSize: '22px', fontWeight: '700', lineHeight: 1.4, color: translatedText ? '#0f172a' : '#94a3b8' }}>
+          {translatedText || 'Translation will appear here...'}
         </p>
       </section>
 
+      {/* Highlighted Number / Price Card */}
       {price && (
         <section
           style={{
-            ...cardStyle,
-            backgroundColor: '#ecfdf5',
-            border: '2px solid #86efac',
+            backgroundColor: '#f0fdf4',
+            padding: '16px 20px',
+            borderRadius: '16px',
+            marginBottom: '16px',
             textAlign: 'center',
+            border: '2px solid #86efac',
           }}
         >
-          <p style={{ margin: '0 0 8px', color: '#166534' }}>
-            IMPORTANT NUMBER / PRICE
-          </p>
-          <p style={{ fontSize: '28px', fontWeight: 'bold', margin: 0 }}>
-            {price}
-          </p>
+          <span style={{ fontSize: '12px', fontWeight: '800', color: '#166534', letterSpacing: '0.05em' }}>
+            KEY NUMBER / PRICE
+          </span>
+          <div style={{ fontSize: '32px', fontWeight: '800', color: '#14532d', marginTop: '2px' }}>{price}</div>
         </section>
       )}
 
+      {/* Play Audio Button */}
       <button
+        type="button"
         onClick={playTranslation}
         disabled={!translatedText}
         style={{
           width: '100%',
           padding: '16px',
-          fontSize: '18px',
-          fontWeight: 'bold',
+          fontSize: '17px',
+          fontWeight: '700',
           backgroundColor: translatedText ? '#2563eb' : '#94a3b8',
           color: '#ffffff',
           border: 'none',
-          borderRadius: '12px',
+          borderRadius: '14px',
           cursor: translatedText ? 'pointer' : 'not-allowed',
           marginBottom: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          boxShadow: translatedText ? '0 4px 12px rgba(37,99,235,0.25)' : 'none',
+          transition: 'all 0.15s ease',
         }}
       >
-        🔊 Play {currentLangLabel} Audio
+        🔊 Listen in {SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label}
       </button>
 
+      {/* Unclear Audio Warning Banner */}
       {isUnclear && (
-        <section
+        <div
           role="alert"
           style={{
             backgroundColor: '#fff7ed',
             border: '1px solid #fdba74',
-            padding: '16px',
+            padding: '14px 16px',
             borderRadius: '12px',
             marginBottom: '16px',
+            color: '#9a3412',
           }}
         >
-          <p style={{ margin: 0, color: '#9a3412', fontWeight: 'bold' }}>
-            ⚠️ Unclear audio
-          </p>
-          <p style={{ marginBottom: 0, color: '#9a3412' }}>
-            Please ask the speaker to repeat. The translation may be inaccurate.
-          </p>
-        </section>
+          <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '2px' }}>⚠️ Unclear Audio</div>
+          <div style={{ fontSize: '13px' }}>
+            The speech was noisy or incomplete. Please ask the speaker to repeat.
+          </div>
+        </div>
       )}
 
-      <p
-        style={{
-          textAlign: 'center',
-          fontSize: '12px',
-          color: '#64748b',
-          marginTop: '24px',
-        }}
-      >
-        EchoBridge · Listener Interface · Live Mode
-      </p>
-    </main>
+      <footer style={{ textAlign: 'center', fontSize: '12px', color: '#94a3b8', marginTop: '32px' }}>
+        EchoBridge · Multi-Language Live Listener
+      </footer>
+    </div>
   );
 }
 

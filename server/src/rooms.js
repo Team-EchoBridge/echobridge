@@ -64,14 +64,39 @@ export function joinRoom(socketId, roomId, tgtLang = 'en') {
     return { ok: false, error: 'Room not found' };
   }
 
-  // If this socket is the creator/speaker joining, don't count them as a listener
-  if (room.speakerSocketId === socketId) {
+  // If this socket is reconnecting as the speaker or is the speaker
+  if (room.speakerSocketId === socketId || (!room.speakerSocketId && tgtLang === room.srcLang)) {
+    room.speakerSocketId = socketId;
     return { ok: true, srcLang: room.srcLang };
   }
 
   // Otherwise, record as a listener
   room.listeners.set(socketId, { socketId, tgtLang });
   return { ok: true, srcLang: room.srcLang };
+}
+
+/**
+ * Close/terminate a room
+ * @param {string} roomId
+ * @returns {boolean}
+ */
+export function closeRoom(roomId) {
+  return rooms.delete(roomId);
+}
+
+/**
+ * Reconnect or rebind a speaker to an existing room (e.g. after refresh)
+ * @param {string} socketId
+ * @param {string} roomId
+ * @returns {boolean}
+ */
+export function rebindSpeaker(socketId, roomId) {
+  const room = rooms.get(roomId);
+  if (room) {
+    room.speakerSocketId = socketId;
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -134,7 +159,7 @@ export function removeSocketFromRooms(socketId) {
     }
 
     if (room.speakerSocketId === socketId) {
-      // Keep room alive for listeners or mark speaker disconnected
+      // Keep room alive for a refresh window so speaker can reconnect without dumping listeners
       room.speakerSocketId = null;
     }
 

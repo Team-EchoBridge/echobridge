@@ -3,7 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { createRoom, joinRoom, getRoom, getListenerCount, getRoomLanguages, removeSocketFromRooms } from './rooms.js';
+import { createRoom, joinRoom, getRoom, getListenerCount, getRoomLanguages, closeRoom, rebindSpeaker, removeSocketFromRooms } from './rooms.js';
 import { TimingTracker } from './timings.js';
 import { processUtterance, getCachedTranslation, setCachedTranslation } from './nlpAdapter.js';
 import { getReplay } from './replay.js';
@@ -91,6 +91,34 @@ io.on('connection', (socket) => {
 
     if (typeof callback === 'function') {
       callback(result);
+    }
+  });
+
+  // Event: room:close (sent by speaker to terminate room)
+  socket.on('room:close', ({ roomId }, callback) => {
+    const room = getRoom(roomId);
+    if (room && (room.speakerSocketId === socket.id || !room.speakerSocketId)) {
+      console.log(`[Room] Closing room ${roomId} by speaker`);
+      io.to(roomId).emit('room:closed', { roomId, reason: 'Speaker terminated the session' });
+      closeRoom(roomId);
+      if (typeof callback === 'function') callback({ ok: true });
+    } else {
+      if (typeof callback === 'function') callback({ ok: false, error: 'Unauthorized or room not found' });
+    }
+  });
+
+  // Event: room:rebind (sent by speaker on refresh to reclaim room)
+  socket.on('room:rebind', ({ roomId }, callback) => {
+    const success = rebindSpeaker(socket.id, roomId);
+    if (success) {
+      socket.join(roomId);
+      const room = getRoom(roomId);
+      console.log(`[Room] Rebound speaker ${socket.id} to existing room ${roomId}`);
+      const count = getListenerCount(roomId);
+      const { breakdown } = getRoomLanguages(roomId);
+      if (typeof callback === 'function') callback({ ok: true, srcLang: room.srcLang, count, languages: breakdown });
+    } else {
+      if (typeof callback === 'function') callback({ ok: false, error: 'Room expired or not found' });
     }
   });
 
