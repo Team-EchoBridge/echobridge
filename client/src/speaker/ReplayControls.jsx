@@ -2,16 +2,26 @@ import React, { useState } from 'react';
 import { REPLAY_RECORDINGS } from './replayRecordings.js';
 
 /**
+ * Known language metadata mapping code to label and flag.
+ */
+const LANGUAGE_META = {
+  en: { label: 'English', flag: '🇬🇧' },
+  hi: { label: 'Hindi', flag: '🇮🇳' },
+  mr: { label: 'Marathi', flag: '🇮🇳' },
+};
+
+/**
  * ReplayControls panel:
  * - Clear "REPLAY MODE" visual indicator / banner.
  * - Filters pre-recorded phrases by the room's current source language.
- * - Allows selecting a phrase and dispatching the utterance with `replayId`.
+ * - Shows multi-language translation previews for English, Hindi, and Marathi.
+ * - Dispatches the utterance event with `replayId` per docs/contracts.md.
  *
  * @param {Object} props
  * @param {string} props.srcLang - Current source language ('hi' | 'mr').
  * @param {boolean} props.isReplayMode - Whether replay mode is toggled on.
  * @param {Function} props.onToggleReplay - Toggles replay mode.
- * @param {Function} props.onSendReplayUtterance - Callback ({ replayId, srcLang, phraseText, audio }) to emit utterance.
+ * @param {Function} props.onSendReplayUtterance - Callback ({ replayId, srcLang, phraseText, audio, translations }) to emit utterance.
  * @param {number} props.seq - Last sequence number emitted.
  */
 export function ReplayControls({
@@ -37,7 +47,6 @@ export function ReplayControls({
 
     try {
       // Per contracts.md: If replayId is set, server returns cached output and skips NLP.
-      // audio: provide a valid empty or minimal 16kHz PCM ArrayBuffer so field is non-null
       const minimalAudioBuffer = new ArrayBuffer(0);
 
       await onSendReplayUtterance({
@@ -45,11 +54,15 @@ export function ReplayControls({
         srcLang: currentPhrase.lang,
         phraseText: currentPhrase.text,
         audio: minimalAudioBuffer,
+        translations: currentPhrase.translations || {},
       });
     } finally {
       setTimeout(() => setIsSending(false), 300);
     }
   };
+
+  const translations = currentPhrase?.translations || {};
+  const translationEntries = Object.entries(translations);
 
   return (
     <div style={panelStyle(isReplayMode)}>
@@ -80,7 +93,7 @@ export function ReplayControls({
       {isReplayMode && (
         <div style={bodyContentStyle}>
           <div style={noticeBoxStyle}>
-            <strong>Jury & Evaluator Notice:</strong> Replay Mode sends pre-recorded test phrases to demonstrate the app pipeline without live microphone dependency.
+            <strong>Jury & Evaluator Notice:</strong> Replay Mode sends pre-recorded test phrases to demonstrate the app pipeline and multi-language translations without live microphone dependency.
           </div>
 
           <div style={selectorGroupStyle}>
@@ -104,12 +117,29 @@ export function ReplayControls({
           {currentPhrase && (
             <div style={phrasePreviewCardStyle}>
               <div style={previewRowStyle}>
-                <span style={previewLabelStyle}>Source text:</span>
+                <span style={previewLabelStyle}>Source text ({srcLang === 'hi' ? 'Hindi' : 'Marathi'}):</span>
                 <span style={srcTextPreviewStyle}>{currentPhrase.text}</span>
               </div>
-              <div style={previewRowStyle}>
-                <span style={previewLabelStyle}>Expected translation:</span>
-                <span style={tgtTextPreviewStyle}>{currentPhrase.translation}</span>
+
+              {/* Multi-language Captions Preview */}
+              <div style={multiLangSectionStyle}>
+                <span style={previewLabelStyle}>Multi-Language Mock Captions:</span>
+                <div style={translationsListStyle}>
+                  {translationEntries.map(([langCode, transText]) => {
+                    const meta = LANGUAGE_META[langCode] || { label: langCode.toUpperCase(), flag: '🌐' };
+                    return (
+                      <div key={langCode} style={transItemStyle}>
+                        <div style={transLangHeaderStyle}>
+                          <span style={transFlagStyle}>{meta.flag}</span>
+                          <span style={transLangNameStyle}>{meta.label}</span>
+                        </div>
+                        <span style={transTextStyle}>
+                          {transText || <em style={{ color: '#78716c' }}>[Empty / Unclear]</em>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -242,36 +272,78 @@ const selectStyle = {
 const phrasePreviewCardStyle = {
   background: '#0c0a09',
   border: '1px solid #292524',
-  padding: '0.75rem 1rem',
+  padding: '0.85rem 1rem',
   borderRadius: '8px',
   display: 'flex',
   flexDirection: 'column',
-  gap: '6px',
+  gap: '10px',
 };
 
 const previewRowStyle = {
   display: 'flex',
   flexDirection: 'column',
-  gap: '2px',
+  gap: '3px',
 };
 
 const previewLabelStyle = {
   fontSize: '0.7rem',
-  color: '#78716c',
+  color: '#a8a29e',
   textTransform: 'uppercase',
-  fontWeight: 600,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
 };
 
 const srcTextPreviewStyle = {
-  fontSize: '0.95rem',
+  fontSize: '1rem',
   fontWeight: 600,
   color: '#f8fafc',
 };
 
-const tgtTextPreviewStyle = {
+const multiLangSectionStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '6px',
+  paddingTop: '8px',
+  borderTop: '1px solid #292524',
+};
+
+const translationsListStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '6px',
+};
+
+const transItemStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '2px',
+  background: '#1c1917',
+  padding: '0.45rem 0.65rem',
+  borderRadius: '6px',
+  border: '1px solid #292524',
+};
+
+const transLangHeaderStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '6px',
+};
+
+const transFlagStyle = {
   fontSize: '0.85rem',
-  color: '#a8a29e',
-  fontStyle: 'italic',
+};
+
+const transLangNameStyle = {
+  fontSize: '0.75rem',
+  fontWeight: 700,
+  color: '#f59e0b',
+  textTransform: 'uppercase',
+};
+
+const transTextStyle = {
+  fontSize: '0.85rem',
+  color: '#d6d3d1',
+  lineHeight: 1.4,
 };
 
 const actionsRowStyle = {
@@ -298,4 +370,3 @@ const seqInfoStyle = {
   fontFamily: 'monospace',
   color: '#fbbf24',
 };
-
