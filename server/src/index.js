@@ -110,7 +110,7 @@ io.on('connection', (socket) => {
     try {
       let nlpResult;
       const { activeLanguages: targetLangs } = getRoomLanguages(roomId);
-      console.log([Utterance] Processing for languages: []);
+      console.log(`[Utterance] Processing for languages: [${targetLangs.join(", ")}]`);
 
       // If replayId is set, server returns the cached output for that id and skips NLP module
       if (replayId) {
