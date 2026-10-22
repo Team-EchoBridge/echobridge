@@ -12,7 +12,6 @@ import { QRCode } from './QRCode.jsx';
 import { SpeakerMicControl } from './SpeakerMicControl.jsx';
 import { SpeakerFeedback } from './SpeakerFeedback.jsx';
 import { ReplayControls } from './ReplayControls.jsx';
-import { LanguageMonitor } from './LanguageMonitor.jsx';
 
 /**
  * Top-level SpeakerPage component mountable at /speak
@@ -21,20 +20,17 @@ import { LanguageMonitor } from './LanguageMonitor.jsx';
  * 2. Room creation ('room:create')
  * 3. Speaker room join ('room:join')
  * 4. Network address field (editable for LAN/Wi-Fi phone access)
- * 5. Display of Join Link, QR Code, and real-time Listener Count ('room:count' with { count, languages })
- * 6. Target Language Monitor: active listeners per language (e.g. English: 3 | Hindi: 1)
- * 7. Status badge: "Broadcasting to X listeners across Y languages"
- * 8. Microphone permission, start/stop speaking, audio level meter, and sentence cutting
- * 9. Utterance emission ({ roomId, srcLang, seq, audio, tSent, replayId? })
- * 10. Error handling for 'utterance:error' from server
- * 11. Live recognized speech feedback (transcript and caption events) with "Unclear, please repeat" banner
- * 12. Replay Mode toggle, pre-recorded phrase selector, and prominent "REPLAY" banner
+ * 5. Display of Join Link, QR Code, and real-time Listener Count ('room:count')
+ * 6. Microphone permission, start/stop speaking, audio level meter, and sentence cutting
+ * 7. Utterance emission ({ roomId, srcLang, seq, audio, tSent, replayId? })
+ * 8. Error handling for 'utterance:error' from server
+ * 9. Live recognized speech feedback (transcript and caption events) with "Unclear, please repeat" banner
+ * 10. Replay Mode toggle, pre-recorded phrase selector, and prominent "REPLAY" banner
  */
 export function SpeakerPage() {
   const [srcLang, setSrcLang] = useState('hi');
   const [roomId, setRoomId] = useState('');
   const [listenerCount, setListenerCount] = useState(0);
-  const [languageBreakdown, setLanguageBreakdown] = useState({}); // { en: 3, hi: 1, ... }
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState(null);
   const [utteranceError, setUtteranceError] = useState(null);
@@ -63,17 +59,10 @@ export function SpeakerPage() {
       });
   }, []);
 
-  // Subscribe to room:count updates (payload: { count, languages? })
+  // Subscribe to room:count updates
   useEffect(() => {
-    const unsubscribeCount = onRoomCount((data) => {
-      const count = typeof data?.count === 'number' ? data.count : 0;
+    const unsubscribeCount = onRoomCount(({ count }) => {
       setListenerCount(count);
-
-      if (data && typeof data.languages === 'object' && data.languages !== null) {
-        setLanguageBreakdown(data.languages);
-      } else if (count === 0) {
-        setLanguageBreakdown({});
-      }
     });
 
     return () => {
@@ -145,8 +134,6 @@ export function SpeakerPage() {
         seqRef.current = 0;
         setCurrentSeq(0);
         setRecognition(null);
-        setListenerCount(0);
-        setLanguageBreakdown({});
 
         await joinRoom(res.roomId, 'en');
       } else {
@@ -196,7 +183,7 @@ export function SpeakerPage() {
   /**
    * Called by ReplayControls to emit a pre-recorded phrase with replayId.
    */
-  const handleSendReplayUtterance = useCallback(({ replayId, phraseText, audio, translations }) => {
+  const handleSendReplayUtterance = useCallback(({ replayId, phraseText, audio }) => {
     if (!roomId) {
       console.warn('Replay utterance ignored: No active room created.');
       return;
@@ -221,12 +208,11 @@ export function SpeakerPage() {
 
     sendUtterance(payload);
 
-    // Provide immediate local preview of the selected replay phrase and translations
-    const englishTranslation = translations?.en || '(Awaiting server replay output...)';
+    // Provide immediate local preview of the selected replay phrase
     setRecognition({
       seq: nextSeq,
       srcText: phraseText,
-      tgtText: englishTranslation,
+      tgtText: '(Awaiting server replay output...)',
       unclear: false,
       timings: { tSent: payload.tSent, tSttDone: Date.now() },
     });
@@ -259,24 +245,6 @@ export function SpeakerPage() {
     }
   };
 
-  // Developer simulation: simulate listener joins in different languages
-  const handleSimulateListener = (langCode) => {
-    setLanguageBreakdown((prev) => {
-      const updated = {
-        ...prev,
-        [langCode]: (prev[langCode] || 0) + 1,
-      };
-      const newTotal = Object.values(updated).reduce((acc, c) => acc + c, 0);
-      setListenerCount(newTotal);
-      return updated;
-    });
-  };
-
-  const handleResetSimulatedListeners = () => {
-    setLanguageBreakdown({});
-    setListenerCount(0);
-  };
-
   const cleanBaseUrl = (networkAddress || '').replace(/\/+$/, '');
   const joinUrl = roomId && cleanBaseUrl
     ? `${cleanBaseUrl}/join/${roomId}`
@@ -290,25 +258,11 @@ export function SpeakerPage() {
     }).catch(() => {});
   };
 
-  // Compute active target language count and active languages list
-  const activeLangEntries = Object.entries(languageBreakdown).filter(([, count]) => count > 0);
-  const activeLanguageCount = activeLangEntries.length > 0
-    ? activeLangEntries.length
-    : (listenerCount > 0 ? 1 : 0);
-
-  const statusBadgeText = `Broadcasting to ${listenerCount} ${listenerCount === 1 ? 'listener' : 'listeners'} across ${activeLanguageCount} ${activeLanguageCount === 1 ? 'language' : 'languages'}`;
-
   return (
     <div style={containerStyle}>
       <header style={headerStyle}>
         <div style={headerTopRowStyle}>
           <div style={brandBadgeStyle}>EchoBridge</div>
-          {roomId && (
-            <div style={broadcastStatusBadgeStyle}>
-              <span style={livePulseDotStyle} />
-              <span>{statusBadgeText}</span>
-            </div>
-          )}
           {isReplayMode && (
             <div style={topReplayBadgeStyle}>
               ⚠️ REPLAY MODE ACTIVE - NOT LIVE MIC
@@ -375,110 +329,63 @@ export function SpeakerPage() {
       ) : (
         <div style={activeGridStyle}>
           {/* Left Column: Room info, Network Address & QR code */}
-          <div style={leftColumnStyle}>
-            <div style={cardStyle}>
-              <div style={roomHeaderStyle}>
-                <div>
-                  <span style={tagStyle}>Room ID</span>
-                  <h2 style={roomIdDisplay}>{roomId}</h2>
-                </div>
-                <div style={listenerBadgeStyle}>
-                  <span style={listenerIconStyle}>👥</span>
-                  <span><strong>{listenerCount}</strong> {listenerCount === 1 ? 'Listener' : 'Listeners'}</span>
-                </div>
+          <div style={cardStyle}>
+            <div style={roomHeaderStyle}>
+              <div>
+                <span style={tagStyle}>Room ID</span>
+                <h2 style={roomIdDisplay}>{roomId}</h2>
               </div>
-
-              <div style={infoRowStyle}>
-                <span style={infoLabelStyle}>Source Language:</span>
-                <span style={infoValueStyle}>{srcLang === 'hi' ? 'Hindi (हिन्दी)' : 'Marathi (मराठी)'}</span>
-              </div>
-
-              {/* Editable Network Address Field */}
-              <div style={networkFieldGroupStyle}>
-                <label htmlFor="network-address-input" style={networkLabelStyle}>
-                  Network address
-                </label>
-                <input
-                  id="network-address-input"
-                  type="text"
-                  value={networkAddress}
-                  onChange={(e) => setNetworkAddress(e.target.value)}
-                  placeholder="http://192.168.1.5:5173"
-                  style={networkInputStyle}
-                />
-                <span style={networkHintStyle}>
-                  Change from localhost to your LAN IP (e.g. http://10.227.218.195:5173) so phones can connect.
-                </span>
-              </div>
-
-              <div style={qrSectionStyle}>
-                <div style={qrWrapperStyle}>
-                  <QRCode text={joinUrl} size={190} />
-                </div>
-                <p style={qrTipStyle}>Scan with a phone camera to join as a listener</p>
-              </div>
-
-              <div style={linkBoxStyle}>
-                <input
-                  type="text"
-                  readOnly
-                  value={joinUrl}
-                  style={linkInputStyle}
-                  onClick={(e) => e.target.select()}
-                />
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  style={copyButtonStyle}
-                >
-                  {copied ? 'Copied!' : 'Copy Link'}
-                </button>
+              <div style={listenerBadgeStyle}>
+                <span style={listenerIconStyle}>👥</span>
+                <span><strong>{listenerCount}</strong> {listenerCount === 1 ? 'Listener' : 'Listeners'}</span>
               </div>
             </div>
 
-            {/* Target Language Monitor (Active languages breakdown) */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <LanguageMonitor
-                languages={languageBreakdown}
-                totalListeners={listenerCount}
-              />
+            <div style={infoRowStyle}>
+              <span style={infoLabelStyle}>Source Language:</span>
+              <span style={infoValueStyle}>{srcLang === 'hi' ? 'Hindi (हिन्दी)' : 'Marathi (मराठी)'}</span>
+            </div>
 
-              {/* Dev Test: Simulate Listener Joins */}
-              <div style={devSimulateRowStyle}>
-                <span style={devTagStyle}>Simulate Listeners:</span>
-                <button
-                  type="button"
-                  onClick={() => handleSimulateListener('en')}
-                  style={devBtnStyle}
-                  title="Simulate +1 English listener"
-                >
-                  + 🇬🇧 English
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSimulateListener('hi')}
-                  style={devBtnStyle}
-                  title="Simulate +1 Hindi listener"
-                >
-                  + 🇮🇳 Hindi
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSimulateListener('mr')}
-                  style={devBtnStyle}
-                  title="Simulate +1 Marathi listener"
-                >
-                  + 🇮🇳 Marathi
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetSimulatedListeners}
-                  style={{ ...devBtnStyle, borderColor: '#ef444455', color: '#f87171' }}
-                  title="Reset simulated listeners to 0"
-                >
-                  ↺ Reset
-                </button>
+            {/* Editable Network Address Field */}
+            <div style={networkFieldGroupStyle}>
+              <label htmlFor="network-address-input" style={networkLabelStyle}>
+                Network address
+              </label>
+              <input
+                id="network-address-input"
+                type="text"
+                value={networkAddress}
+                onChange={(e) => setNetworkAddress(e.target.value)}
+                placeholder="http://192.168.1.5:5173"
+                style={networkInputStyle}
+              />
+              <span style={networkHintStyle}>
+                Change from localhost to your LAN IP (e.g. http://10.227.218.195:5173) so phones can connect.
+              </span>
+            </div>
+
+            <div style={qrSectionStyle}>
+              <div style={qrWrapperStyle}>
+                <QRCode text={joinUrl} size={190} />
               </div>
+              <p style={qrTipStyle}>Scan with a phone camera to join as a listener</p>
+            </div>
+
+            <div style={linkBoxStyle}>
+              <input
+                type="text"
+                readOnly
+                value={joinUrl}
+                style={linkInputStyle}
+                onClick={(e) => e.target.select()}
+              />
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                style={copyButtonStyle}
+              >
+                {copied ? 'Copied!' : 'Copy Link'}
+              </button>
             </div>
           </div>
 
@@ -572,28 +479,6 @@ const brandBadgeStyle = {
   borderRadius: '4px',
 };
 
-const broadcastStatusBadgeStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '8px',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#38bdf8',
-  background: '#0c4a6e33',
-  border: '1px solid #0284c766',
-  padding: '0.3rem 0.75rem',
-  borderRadius: '9999px',
-  letterSpacing: '0.01em',
-};
-
-const livePulseDotStyle = {
-  width: '8px',
-  height: '8px',
-  borderRadius: '50%',
-  backgroundColor: '#38bdf8',
-  boxShadow: '0 0 8px #38bdf8',
-};
-
 const topReplayBadgeStyle = {
   fontSize: '0.75rem',
   fontWeight: 800,
@@ -632,12 +517,6 @@ const activeGridStyle = {
   gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
   gap: '1.5rem',
   alignItems: 'start',
-};
-
-const leftColumnStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '1.5rem',
 };
 
 const rightColumnStyle = {
@@ -867,17 +746,6 @@ const devControlsStyle = {
   alignItems: 'center',
   gap: '6px',
   marginBottom: '1.25rem',
-};
-
-const devSimulateRowStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: '6px',
-  padding: '0.4rem 0.6rem',
-  background: '#070d18',
-  border: '1px dashed #1e293b',
-  borderRadius: '8px',
 };
 
 const devTagStyle = {

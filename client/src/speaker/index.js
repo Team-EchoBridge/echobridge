@@ -5,7 +5,6 @@ export { SpeakerFeedback } from './SpeakerFeedback.jsx';
 export { ReplayControls } from './ReplayControls.jsx';
 export { REPLAY_RECORDINGS } from './replayRecordings.js';
 export { PhraseRecorder } from './PhraseRecorder.jsx';
-export { LanguageMonitor } from './LanguageMonitor.jsx';
 export { QRCode } from './QRCode.jsx';
 export { resampleTo16kHz, floatTo16BitPCM, encodeSentenceAudio, createWavHeader, pcmToWavBlob } from './audioEncoder.js';
 export { SpeakerPage } from './SpeakerPage.jsx';
