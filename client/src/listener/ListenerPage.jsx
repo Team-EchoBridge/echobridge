@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { joinRoom, onCaption } from '../shared/socket.js';
+import { joinRoom, onCaption, onRoomClosed } from '../shared/socket.js';
 
 export function ListenerPage({ roomId }) {
 const [originalText, setOriginalText] = useState('');
@@ -76,9 +76,17 @@ joinRoom(roomId, 'en')
     setError(err?.message || 'Could not connect to the server.');
   });
 
+const unsubscribeClosed = onRoomClosed(({ reason }) => {
+  if (!active) return;
+  setIsConnected(false);
+  setStatus('Session ended');
+  setError(reason || 'The speaker has ended the session.');
+});
+
 return () => {
   active = false;
   unsubscribe();
+  if (unsubscribeClosed) unsubscribeClosed();
 };
 
 
