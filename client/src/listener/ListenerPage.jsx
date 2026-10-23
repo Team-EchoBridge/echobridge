@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { joinRoom, onCaption, onRoomClosed } from '../shared/socket.js';
 
 const SUPPORTED_LANGUAGES = [
@@ -8,12 +8,13 @@ const SUPPORTED_LANGUAGES = [
   { code: 'es', label: 'Spanish', defaultVoiceLang: 'es-ES', voiceMatch: ['es-ES', 'es-US', 'es-MX', 'es'] }
 ];
 
-const STORAGE_KEY = 'echobridge_listener_lang';
+const STORAGE_LANG_KEY = 'echobridge_listener_lang';
+const STORAGE_AUTOPLAY_KEY = 'echobridge_listener_autoplay';
 
 export function ListenerPage({ roomId }) {
   const [selectedLang, setSelectedLang] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(STORAGE_LANG_KEY);
       if (saved && SUPPORTED_LANGUAGES.some((lang) => lang.code === saved)) {
         return saved;
       }
@@ -23,6 +24,19 @@ export function ListenerPage({ roomId }) {
     return 'en';
   });
 
+  const [isAutoplay, setIsAutoplay] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_AUTOPLAY_KEY);
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch {
+      // Ignore localStorage read failures
+    }
+    return true; // Default to true
+  });
+
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [originalText, setOriginalText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
   const [price, setPrice] = useState('');
@@ -31,6 +45,25 @@ export function ListenerPage({ roomId }) {
   const [error, setError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [voices, setVoices] = useState([]);
+
+  // Audio queue refs to prevent state closure issues
+  const queueRef = useRef([]);
+  const isPlayingRef = useRef(false);
+  const isAutoplayRef = useRef(isAutoplay);
+  const selectedLangRef = useRef(selectedLang);
+  const voicesRef = useRef(voices);
+
+  useEffect(() => {
+    isAutoplayRef.current = isAutoplay;
+  }, [isAutoplay]);
+
+  useEffect(() => {
+    selectedLangRef.current = selectedLang;
+  }, [selectedLang]);
+
+  useEffect(() => {
+    voicesRef.current = voices;
+  }, [voices]);
 
   // Load available speech synthesis voices
   useEffect(() => {
@@ -51,13 +84,109 @@ export function ListenerPage({ roomId }) {
     };
   }, []);
 
+  const getBestVoice = useCallback((langCode) => {
+    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === langCode);
+    const voiceList = voicesRef.current;
+    if (!langConfig || !voiceList.length) return null;
+
+    for (const matchPrefix of langConfig.voiceMatch) {
+      const exact = voiceList.find((v) => v.lang.toLowerCase() === matchPrefix.toLowerCase());
+      if (exact) return exact;
+    }
+
+    for (const matchPrefix of langConfig.voiceMatch) {
+      const startsWith = voiceList.find((v) =>
+        v.lang.toLowerCase().startsWith(matchPrefix.toLowerCase())
+      );
+      if (startsWith) return startsWith;
+    }
+
+    // Fallback: match by 2-letter language prefix
+    return voiceList.find((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase())) || null;
+  }, []);
+
+  // Process the FIFO queue one sentence at a time
+  const processQueue = useCallback(() => {
+    if (!('speechSynthesis' in window)) return;
+    if (isPlayingRef.current) return;
+    if (queueRef.current.length === 0) return;
+
+    const nextItem = queueRef.current.shift();
+    if (!nextItem || !nextItem.text) {
+      processQueue();
+      return;
+    }
+
+    isPlayingRef.current = true;
+    const speech = new SpeechSynthesisUtterance(nextItem.text);
+    const chosenVoice = getBestVoice(nextItem.lang);
+    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === nextItem.lang);
+
+    if (chosenVoice) {
+      speech.voice = chosenVoice;
+      speech.lang = chosenVoice.lang;
+    } else {
+      speech.lang = langConfig?.defaultVoiceLang || nextItem.lang;
+    }
+
+    speech.rate = 0.9;
+
+    speech.onend = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    speech.onerror = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    window.speechSynthesis.speak(speech);
+  }, [getBestVoice]);
+
   // Save selected language to localStorage
   const handleLanguageChange = (langCode) => {
     setSelectedLang(langCode);
     try {
-      localStorage.setItem(STORAGE_KEY, langCode);
+      localStorage.setItem(STORAGE_LANG_KEY, langCode);
     } catch {
       // Ignore localStorage write failures
+    }
+  };
+
+  // Toggle autoplay
+  const handleAutoplayToggle = (e) => {
+    const newVal = e.target.checked;
+    setIsAutoplay(newVal);
+    try {
+      localStorage.setItem(STORAGE_AUTOPLAY_KEY, String(newVal));
+    } catch {
+      // Ignore
+    }
+    if (!newVal) {
+      // Clear queue and cancel active speech if autoplay turned off
+      queueRef.current = [];
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      isPlayingRef.current = false;
+    }
+  };
+
+  // Unlock mobile audio on first user tap
+  const handleUnlockAudio = () => {
+    setIsAudioUnlocked(true);
+    setIsAutoplay(true);
+    try {
+      localStorage.setItem(STORAGE_AUTOPLAY_KEY, 'true');
+    } catch {
+      // Ignore
+    }
+
+    if ('speechSynthesis' in window) {
+      // Play a short silent/blank utterance to unlock mobile Safari / Chrome audio
+      const silent = new SpeechSynthesisUtterance('');
+      window.speechSynthesis.speak(silent);
     }
   };
 
@@ -110,6 +239,16 @@ export function ListenerPage({ roomId }) {
       } else {
         setStatus('Live captions');
       }
+
+      // Sequential Speech Queue (Autoplay)
+      if (!data.unclear && data.tgtText && isAutoplayRef.current) {
+        queueRef.current.push({
+          text: data.tgtText,
+          lang: selectedLangRef.current,
+          seq: data.seq
+        });
+        processQueue();
+      }
     });
 
     const unsubscribeClosed = onRoomClosed(({ reason }) => {
@@ -143,52 +282,49 @@ export function ListenerPage({ roomId }) {
       unsubscribe();
       if (unsubscribeClosed) unsubscribeClosed();
     };
-  }, [roomId, selectedLang]);
+  }, [roomId, selectedLang, processQueue]);
 
-  const getBestVoice = useCallback((langCode) => {
-    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === langCode);
-    if (!langConfig || !voices.length) return null;
-
-    for (const matchPrefix of langConfig.voiceMatch) {
-      const exact = voices.find((v) => v.lang.toLowerCase() === matchPrefix.toLowerCase());
-      if (exact) return exact;
-    }
-
-    for (const matchPrefix of langConfig.voiceMatch) {
-      const startsWith = voices.find((v) =>
-        v.lang.toLowerCase().startsWith(matchPrefix.toLowerCase())
-      );
-      if (startsWith) return startsWith;
-    }
-
-    // Fallback: match by 2-letter language prefix
-    return voices.find((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase())) || null;
-  }, [voices]);
-
-  const playTranslation = () => {
-    if (!translatedText) return;
+  const replayTranslation = () => {
+    if (!translatedText || isUnclear) return;
 
     if (!('speechSynthesis' in window)) {
       setError('Audio playback is not supported by this browser.');
       return;
     }
 
+    // Cancel running speech and clear pending queue for immediate replay
     window.speechSynthesis.cancel();
+    queueRef.current = [];
+    isPlayingRef.current = true;
 
     const speech = new SpeechSynthesisUtterance(translatedText);
+    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang);
     const chosenVoice = getBestVoice(selectedLang);
 
     if (chosenVoice) {
       speech.voice = chosenVoice;
       speech.lang = chosenVoice.lang;
     } else {
-      const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang);
-      speech.lang = langConfig?.defaultVoiceLang || 'en-IN';
+      speech.lang = langConfig?.defaultVoiceLang || selectedLang;
     }
 
     speech.rate = 0.9;
+
+    speech.onend = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    speech.onerror = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
     window.speechSynthesis.speak(speech);
   };
+
+  const currentLangLabel =
+    SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label || selectedLang.toUpperCase();
 
   return (
     <div
@@ -210,53 +346,136 @@ export function ListenerPage({ roomId }) {
         <p style={{ color: '#64748b', margin: 0, fontSize: '15px' }}>Live Tour Translation</p>
       </header>
 
-      {/* Language Picker Header */}
+      {/* Mobile Audio Permission Banner */}
+      {!isAudioUnlocked && (
+        <section
+          style={{
+            backgroundColor: '#eff6ff',
+            border: '1px solid #93c5fd',
+            borderRadius: '16px',
+            textAlign: 'center',
+            padding: '16px',
+            marginBottom: '16px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          }}
+        >
+          <p style={{ margin: '0 0 10px', color: '#1e40af', fontWeight: 'bold', fontSize: '15px' }}>
+            Enable Live Audio Translation
+          </p>
+          <button
+            onClick={handleUnlockAudio}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '15px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
+            }}
+          >
+            🔊 Tap to Enable Live Audio
+          </button>
+        </section>
+      )}
+
+      {/* Language Selector & Autoplay Toggle Card */}
       <section
         style={{
           backgroundColor: '#ffffff',
-          padding: '16px',
+          padding: '16px 20px',
           borderRadius: '16px',
           marginBottom: '16px',
           border: '1px solid #e2e8f0',
           boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
         }}
       >
-        <label
-          htmlFor="lang-select"
-          style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginBottom: '14px',
+          }}
         >
-          SELECT YOUR LANGUAGE
-        </label>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          {SUPPORTED_LANGUAGES.map((lang) => (
-            <button
-              key={lang.code}
-              type="button"
-              onClick={() => handleLanguageChange(lang.code)}
-              style={{
-                flex: '1 1 auto',
-                padding: '10px 14px',
-                borderRadius: '10px',
-                border: selectedLang === lang.code ? '2px solid #2563eb' : '1px solid #cbd5e1',
-                backgroundColor: selectedLang === lang.code ? '#eff6ff' : '#ffffff',
-                color: selectedLang === lang.code ? '#1d4ed8' : '#334155',
-                fontWeight: selectedLang === lang.code ? '700' : '500',
-                cursor: 'pointer',
-                fontSize: '14px',
-                transition: 'all 0.15s ease',
-              }}
-            >
-              {lang.label}
-            </button>
-          ))}
+          <label style={{ fontSize: '13px', fontWeight: '700', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Listening Language:
+          </label>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {SUPPORTED_LANGUAGES.map((lang) => {
+              const active = lang.code === selectedLang;
+              return (
+                <button
+                  key={lang.code}
+                  type="button"
+                  onClick={() => handleLanguageChange(lang.code)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '9999px',
+                    border: active ? '2px solid #2563eb' : '1px solid #cbd5e1',
+                    backgroundColor: active ? '#eff6ff' : '#ffffff',
+                    color: active ? '#1d4ed8' : '#475569',
+                    fontWeight: active ? '700' : '500',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {lang.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Autoplay Toggle Switch */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderTop: '1px solid #f1f5f9',
+            paddingTop: '12px',
+          }}
+        >
+          <label
+            htmlFor="autoplay-toggle"
+            style={{
+              fontWeight: '600',
+              fontSize: '14px',
+              color: '#334155',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>▶️</span> Autoplay Live Speech
+          </label>
+          <input
+            id="autoplay-toggle"
+            type="checkbox"
+            checked={isAutoplay}
+            onChange={handleAutoplayToggle}
+            style={{
+              width: '18px',
+              height: '18px',
+              cursor: 'pointer',
+              accentColor: '#2563eb',
+            }}
+          />
         </div>
       </section>
 
-      {/* Room Information & Live Connection Status */}
+      {/* Room and Status Card */}
       <section
         style={{
           backgroundColor: '#ffffff',
-          padding: '16px',
+          padding: '16px 20px',
           borderRadius: '16px',
           marginBottom: '16px',
           border: '1px solid #e2e8f0',
@@ -349,10 +568,10 @@ export function ListenerPage({ roomId }) {
         }}
       >
         <h2 style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: '700', color: '#64748b', letterSpacing: '0.05em' }}>
-          TRANSLATION ({SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label.toUpperCase()})
+          TRANSLATION ({currentLangLabel.toUpperCase()})
         </h2>
         <p style={{ margin: 0, fontSize: '22px', fontWeight: '700', lineHeight: 1.4, color: translatedText ? '#0f172a' : '#94a3b8' }}>
-          {translatedText || 'Translation will appear here...'}
+          {translatedText || `Your ${currentLangLabel} translation will appear here.`}
         </p>
       </section>
 
@@ -375,31 +594,31 @@ export function ListenerPage({ roomId }) {
         </section>
       )}
 
-      {/* Play Audio Button */}
+      {/* Replay / Manual Play Action Button */}
       <button
         type="button"
-        onClick={playTranslation}
-        disabled={!translatedText}
+        onClick={replayTranslation}
+        disabled={!translatedText || isUnclear}
         style={{
           width: '100%',
           padding: '16px',
           fontSize: '17px',
           fontWeight: '700',
-          backgroundColor: translatedText ? '#2563eb' : '#94a3b8',
+          backgroundColor: translatedText && !isUnclear ? '#2563eb' : '#94a3b8',
           color: '#ffffff',
           border: 'none',
           borderRadius: '14px',
-          cursor: translatedText ? 'pointer' : 'not-allowed',
+          cursor: translatedText && !isUnclear ? 'pointer' : 'not-allowed',
           marginBottom: '16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           gap: '8px',
-          boxShadow: translatedText ? '0 4px 12px rgba(37,99,235,0.25)' : 'none',
+          boxShadow: translatedText && !isUnclear ? '0 4px 12px rgba(37,99,235,0.25)' : 'none',
           transition: 'all 0.15s ease',
         }}
       >
-        🔊 Listen in {SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang)?.label}
+        🔁 Replay {currentLangLabel} Translation
       </button>
 
       {/* Unclear Audio Warning Banner */}
