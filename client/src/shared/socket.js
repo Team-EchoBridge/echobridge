@@ -42,6 +42,41 @@ export function joinRoom(roomId, tgtLang) {
 }
 
 /**
+ * Rebind speaker to existing room after page refresh
+ * @param {string} roomId
+ * @returns {Promise<{ ok: boolean, srcLang?: string, count?: number, languages?: object, error?: string }>}
+ */
+export function rebindSpeaker(roomId) {
+  return new Promise((resolve) => {
+    socket.emit('room:rebind', { roomId }, (response) => {
+      resolve(response);
+    });
+  });
+}
+
+/**
+ * Explicitly terminate/close a room (speaker only)
+ * @param {string} roomId
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export function closeRoom(roomId) {
+  return new Promise((resolve) => {
+    socket.emit('room:close', { roomId }, (response) => {
+      resolve(response);
+    });
+  });
+}
+
+/**
+ * Listen for room termination event (sent to listeners when speaker ends session)
+ * @param {(data: { roomId: string, reason: string }) => void} callback
+ */
+export function onRoomClosed(callback) {
+  socket.on('room:closed', callback);
+  return () => socket.off('room:closed', callback);
+}
+
+/**
  * Send an utterance (speaker)
  * @param {{ roomId: string, srcLang: string, seq: number, audio: ArrayBuffer, tSent: number, replayId?: string }} payload
  */
@@ -69,7 +104,7 @@ export function onCaption(callback) {
 
 /**
  * Listen to room listener count (speaker only)
- * @param {(data: { count: number }) => void} callback
+ * @param {(data: { count: number, languages?: Record<string, number> }) => void} callback
  */
 export function onRoomCount(callback) {
   socket.on('room:count', callback);
@@ -84,4 +119,3 @@ export function onUtteranceError(callback) {
   socket.on('utterance:error', callback);
   return () => socket.off('utterance:error', callback);
 }
-
