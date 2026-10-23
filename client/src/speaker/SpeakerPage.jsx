@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   createRoom,
   joinRoom,
+  rebindSpeaker,
+  closeRoom,
   sendUtterance,
   onRoomCount,
   onTranscript,
@@ -32,7 +34,9 @@ import { LanguageMonitor } from './LanguageMonitor.jsx';
  */
 export function SpeakerPage() {
   const [srcLang, setSrcLang] = useState('hi');
-  const [roomId, setRoomId] = useState('');
+  const [roomId, setRoomId] = useState(() => {
+    try { return sessionStorage.getItem('echobridge_speaker_room') || ''; } catch { return ''; }
+  });
   const [listenerCount, setListenerCount] = useState(0);
   const [languageBreakdown, setLanguageBreakdown] = useState({}); // { en: 3, hi: 1, ... }
   const [isCreating, setIsCreating] = useState(false);
@@ -48,6 +52,29 @@ export function SpeakerPage() {
 
   // Keep seq in a ref to avoid stale closure issues during async sentence cuts
   const seqRef = useRef(0);
+
+
+  // Attempt to rebind to existing room on refresh
+  useEffect(() => {
+    const savedRoomId = sessionStorage.getItem('echobridge_speaker_room');
+    if (savedRoomId) {
+      rebindSpeaker(savedRoomId).then((res) => {
+        if (res && res.ok) {
+          console.log('[Speaker] Reconnected to existing room:', savedRoomId);
+          setRoomId(savedRoomId);
+          if (res.srcLang) setSrcLang(res.srcLang);
+          if (typeof res.count === 'number') setListenerCount(res.count);
+        } else {
+          console.log('[Speaker] Saved room expired, clearing session.');
+          sessionStorage.removeItem('echobridge_speaker_room');
+          setRoomId('');
+        }
+      }).catch(() => {
+        sessionStorage.removeItem('echobridge_speaker_room');
+        setRoomId('');
+      });
+    }
+  }, []);
 
   // Auto-fetch LAN IP address from backend if speaker is opened on localhost
   useEffect(() => {
@@ -132,6 +159,19 @@ export function SpeakerPage() {
     };
   }, []);
 
+
+  const handleTerminateRoom = async () => {
+    if (!roomId) return;
+    try {
+      await closeRoom(roomId);
+    } finally {
+      sessionStorage.removeItem('echobridge_speaker_room');
+      setRoomId('');
+      setListenerCount(0);
+      setRecognition(null);
+    }
+  };
+
   const handleCreateRoom = async (e) => {
     e.preventDefault();
     setError(null);
@@ -142,6 +182,7 @@ export function SpeakerPage() {
       const res = await createRoom(srcLang);
       if (res && res.roomId) {
         setRoomId(res.roomId);
+        try { sessionStorage.setItem('echobridge_speaker_room', res.roomId); } catch {}
         seqRef.current = 0;
         setCurrentSeq(0);
         setRecognition(null);
