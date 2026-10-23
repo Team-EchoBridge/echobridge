@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { joinRoom, onCaption } from '../shared/socket.js';
 
 const SUPPORTED_LANGUAGES = [
@@ -8,12 +8,13 @@ const SUPPORTED_LANGUAGES = [
   { code: 'es', label: 'Spanish', defaultVoiceLang: 'es-ES', voiceMatch: ['es-ES', 'es-US', 'es-MX', 'es'] }
 ];
 
-const STORAGE_KEY = 'echobridge_listener_lang';
+const STORAGE_LANG_KEY = 'echobridge_listener_lang';
+const STORAGE_AUTOPLAY_KEY = 'echobridge_listener_autoplay';
 
 export function ListenerPage({ roomId }) {
   const [selectedLang, setSelectedLang] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(STORAGE_LANG_KEY);
       if (saved && SUPPORTED_LANGUAGES.some((lang) => lang.code === saved)) {
         return saved;
       }
@@ -23,6 +24,19 @@ export function ListenerPage({ roomId }) {
     return 'en';
   });
 
+  const [isAutoplay, setIsAutoplay] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_AUTOPLAY_KEY);
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch {
+      // Ignore localStorage read failures
+    }
+    return true; // Default to true
+  });
+
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
   const [originalText, setOriginalText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
   const [price, setPrice] = useState('');
@@ -31,6 +45,25 @@ export function ListenerPage({ roomId }) {
   const [error, setError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [voices, setVoices] = useState([]);
+
+  // Audio queue refs to prevent state closure issues
+  const queueRef = useRef([]);
+  const isPlayingRef = useRef(false);
+  const isAutoplayRef = useRef(isAutoplay);
+  const selectedLangRef = useRef(selectedLang);
+  const voicesRef = useRef(voices);
+
+  useEffect(() => {
+    isAutoplayRef.current = isAutoplay;
+  }, [isAutoplay]);
+
+  useEffect(() => {
+    selectedLangRef.current = selectedLang;
+  }, [selectedLang]);
+
+  useEffect(() => {
+    voicesRef.current = voices;
+  }, [voices]);
 
   // Load available speech synthesis voices
   useEffect(() => {
@@ -51,13 +84,109 @@ export function ListenerPage({ roomId }) {
     };
   }, []);
 
+  const getBestVoice = useCallback((langCode) => {
+    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === langCode);
+    const voiceList = voicesRef.current;
+    if (!langConfig || !voiceList.length) return null;
+
+    for (const matchPrefix of langConfig.voiceMatch) {
+      const exact = voiceList.find((v) => v.lang.toLowerCase() === matchPrefix.toLowerCase());
+      if (exact) return exact;
+    }
+
+    for (const matchPrefix of langConfig.voiceMatch) {
+      const startsWith = voiceList.find((v) =>
+        v.lang.toLowerCase().startsWith(matchPrefix.toLowerCase())
+      );
+      if (startsWith) return startsWith;
+    }
+
+    // Fallback: match by 2-letter language prefix
+    return voiceList.find((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase())) || null;
+  }, []);
+
+  // Process the FIFO queue one sentence at a time
+  const processQueue = useCallback(() => {
+    if (!('speechSynthesis' in window)) return;
+    if (isPlayingRef.current) return;
+    if (queueRef.current.length === 0) return;
+
+    const nextItem = queueRef.current.shift();
+    if (!nextItem || !nextItem.text) {
+      processQueue();
+      return;
+    }
+
+    isPlayingRef.current = true;
+    const speech = new SpeechSynthesisUtterance(nextItem.text);
+    const chosenVoice = getBestVoice(nextItem.lang);
+    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === nextItem.lang);
+
+    if (chosenVoice) {
+      speech.voice = chosenVoice;
+      speech.lang = chosenVoice.lang;
+    } else {
+      speech.lang = langConfig?.defaultVoiceLang || nextItem.lang;
+    }
+
+    speech.rate = 0.9;
+
+    speech.onend = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    speech.onerror = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    window.speechSynthesis.speak(speech);
+  }, [getBestVoice]);
+
   // Save selected language to localStorage
   const handleLanguageChange = (langCode) => {
     setSelectedLang(langCode);
     try {
-      localStorage.setItem(STORAGE_KEY, langCode);
+      localStorage.setItem(STORAGE_LANG_KEY, langCode);
     } catch {
       // Ignore localStorage write failures
+    }
+  };
+
+  // Toggle autoplay
+  const handleAutoplayToggle = (e) => {
+    const newVal = e.target.checked;
+    setIsAutoplay(newVal);
+    try {
+      localStorage.setItem(STORAGE_AUTOPLAY_KEY, String(newVal));
+    } catch {
+      // Ignore
+    }
+    if (!newVal) {
+      // Clear queue and cancel active speech if autoplay turned off
+      queueRef.current = [];
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      isPlayingRef.current = false;
+    }
+  };
+
+  // Unlock mobile audio on first user tap
+  const handleUnlockAudio = () => {
+    setIsAudioUnlocked(true);
+    setIsAutoplay(true);
+    try {
+      localStorage.setItem(STORAGE_AUTOPLAY_KEY, 'true');
+    } catch {
+      // Ignore
+    }
+
+    if ('speechSynthesis' in window) {
+      // Play a short silent/blank utterance to unlock mobile Safari / Chrome audio
+      const silent = new SpeechSynthesisUtterance('');
+      window.speechSynthesis.speak(silent);
     }
   };
 
@@ -110,6 +239,16 @@ export function ListenerPage({ roomId }) {
       } else {
         setStatus('Live captions');
       }
+
+      // Sequential Speech Queue (Autoplay)
+      if (!data.unclear && data.tgtText && isAutoplayRef.current) {
+        queueRef.current.push({
+          text: data.tgtText,
+          lang: selectedLangRef.current,
+          seq: data.seq
+        });
+        processQueue();
+      }
     });
 
     joinRoom(roomId, selectedLang)
@@ -135,37 +274,20 @@ export function ListenerPage({ roomId }) {
       active = false;
       unsubscribe();
     };
-  }, [roomId, selectedLang]);
+  }, [roomId, selectedLang, processQueue]);
 
-  const getBestVoice = useCallback((langCode) => {
-    const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === langCode);
-    if (!langConfig || !voices.length) return null;
-
-    for (const matchPrefix of langConfig.voiceMatch) {
-      const exact = voices.find((v) => v.lang.toLowerCase() === matchPrefix.toLowerCase());
-      if (exact) return exact;
-    }
-
-    for (const matchPrefix of langConfig.voiceMatch) {
-      const startsWith = voices.find((v) =>
-        v.lang.toLowerCase().startsWith(matchPrefix.toLowerCase())
-      );
-      if (startsWith) return startsWith;
-    }
-
-    // Fallback: match by 2-letter language prefix
-    return voices.find((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase())) || null;
-  }, [voices]);
-
-  const playTranslation = () => {
-    if (!translatedText) return;
+  const replayTranslation = () => {
+    if (!translatedText || isUnclear) return;
 
     if (!('speechSynthesis' in window)) {
       setError('Audio playback is not supported by this browser.');
       return;
     }
 
+    // Cancel running speech and clear pending queue for immediate replay
     window.speechSynthesis.cancel();
+    queueRef.current = [];
+    isPlayingRef.current = true;
 
     const speech = new SpeechSynthesisUtterance(translatedText);
     const langConfig = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLang);
@@ -179,6 +301,17 @@ export function ListenerPage({ roomId }) {
     }
 
     speech.rate = 0.9;
+
+    speech.onend = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
+    speech.onerror = () => {
+      isPlayingRef.current = false;
+      processQueue();
+    };
+
     window.speechSynthesis.speak(speech);
   };
 
@@ -211,7 +344,40 @@ export function ListenerPage({ roomId }) {
         <p style={{ color: '#64748b', margin: 0 }}>Live Tour Translation</p>
       </header>
 
-      {/* Language Selector Card */}
+      {/* Mobile Audio Permission Banner */}
+      {!isAudioUnlocked && (
+        <section
+          style={{
+            ...cardStyle,
+            backgroundColor: '#eff6ff',
+            borderColor: '#93c5fd',
+            textAlign: 'center',
+            padding: '16px',
+          }}
+        >
+          <p style={{ margin: '0 0 10px', color: '#1e40af', fontWeight: 'bold' }}>
+            Enable Live Audio Translation
+          </p>
+          <button
+            onClick={handleUnlockAudio}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '15px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
+            }}
+          >
+            🔊 Tap to Enable Live Audio
+          </button>
+        </section>
+      )}
+
+      {/* Language Selector & Autoplay Toggle Card */}
       <section style={cardStyle}>
         <div
           style={{
@@ -220,6 +386,7 @@ export function ListenerPage({ roomId }) {
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: '12px',
+            marginBottom: '16px',
           }}
         >
           <label style={{ fontWeight: 'bold', fontSize: '15px' }}>
@@ -250,6 +417,44 @@ export function ListenerPage({ roomId }) {
               );
             })}
           </div>
+        </div>
+
+        {/* Autoplay Toggle Switch */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderTop: '1px solid #f1f5f9',
+            paddingTop: '12px',
+          }}
+        >
+          <label
+            htmlFor="autoplay-toggle"
+            style={{
+              fontWeight: 'bold',
+              fontSize: '14px',
+              color: '#334155',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>▶️</span> Autoplay Live Speech
+          </label>
+          <input
+            id="autoplay-toggle"
+            type="checkbox"
+            checked={isAutoplay}
+            onChange={handleAutoplayToggle}
+            style={{
+              width: '20px',
+              height: '20px',
+              cursor: 'pointer',
+              accentColor: '#2563eb',
+            }}
+          />
         </div>
       </section>
 
@@ -317,23 +522,25 @@ export function ListenerPage({ roomId }) {
         </section>
       )}
 
+      {/* Replay / Manual Play Action Button */}
       <button
-        onClick={playTranslation}
-        disabled={!translatedText}
+        onClick={replayTranslation}
+        disabled={!translatedText || isUnclear}
         style={{
           width: '100%',
           padding: '16px',
           fontSize: '18px',
           fontWeight: 'bold',
-          backgroundColor: translatedText ? '#2563eb' : '#94a3b8',
+          backgroundColor: translatedText && !isUnclear ? '#2563eb' : '#94a3b8',
           color: '#ffffff',
           border: 'none',
           borderRadius: '12px',
-          cursor: translatedText ? 'pointer' : 'not-allowed',
+          cursor: translatedText && !isUnclear ? 'pointer' : 'not-allowed',
           marginBottom: '16px',
+          transition: 'background-color 0.15s ease-in-out',
         }}
       >
-        🔊 Play {currentLangLabel} Audio
+        🔁 Replay {currentLangLabel} Translation
       </button>
 
       {isUnclear && (
